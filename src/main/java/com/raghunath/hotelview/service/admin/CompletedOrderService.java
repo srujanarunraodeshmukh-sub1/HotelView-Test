@@ -214,12 +214,20 @@ public class CompletedOrderService {
                         .orElseThrow(() -> new RuntimeException("Item '" + incomingItem.getItemName() +
                                 "' does not exist in the original bill. Only modifications are allowed."));
 
-                if (incomingItem.getQuantity() < 0) {
-                    throw new RuntimeException("Quantity for '" + incomingItem.getItemName() + "' cannot be negative.");
-                }
+                // 🌟 SAFE STRING QUANTITY CHECK VALIDATION
+                if (incomingItem.getQuantity() != null) {
+                    try {
+                        double parsedQty = Double.parseDouble(incomingItem.getQuantity().trim());
+                        if (parsedQty < 0) {
+                            throw new RuntimeException("Quantity for '" + incomingItem.getItemName() + "' cannot be negative.");
+                        }
+                    } catch (NumberFormatException e) {
+                        throw new RuntimeException("Quantity for '" + incomingItem.getItemName() + "' must be a valid numeric value.");
+                    }
 
-                // Directly assign the raw frontend parameter values
-                originalDbItem.setQuantity(String.valueOf(incomingItem.getQuantity()));
+                    // Directly assign the raw frontend string value safely
+                    originalDbItem.setQuantity(incomingItem.getQuantity());
+                }
 
                 // 🌟 Save the frontend subtotal if provided, otherwise leave unchanged
                 if (incomingItem.getSubTotal() != null) {
@@ -403,19 +411,25 @@ public class CompletedOrderService {
             return java.util.Collections.emptyList();
         }
 
-        // 2. Loop through nested inner structures to gather raw item records
-        List<OrderItem> orderedItems = order.getAllOrders().get(0).getItems();
-        if (orderedItems == null || orderedItems.isEmpty()) {
+        // 🌟 2. THE FIX: Use Java Streams to dynamically extract all items from all order blocks
+        // This entirely bypasses the need to explicitly name the 'SubOrder' class!
+        List<OrderItem> allOrderedItems = order.getAllOrders().stream()
+                .filter(subOrderBlock -> subOrderBlock != null && subOrderBlock.getItems() != null)
+                .flatMap(subOrderBlock -> subOrderBlock.getItems().stream())
+                .collect(java.util.stream.Collectors.toList());
+
+        if (allOrderedItems.isEmpty()) {
             return java.util.Collections.emptyList();
         }
 
         List<InventoryItemsResponse> targetDetailsList = new java.util.ArrayList<>();
 
-        // 🌟 3. MATCH DIRECTLY BY UNIQUE ITEM ID (Resolves the non-unique result error)
-        for (OrderItem item : orderedItems) {
-            if (item.getItemId() != null && !item.getItemId().trim().isEmpty()) {
+        // 3. Loop through the combined master list of all items on this bill
+        for (OrderItem item : allOrderedItems) {
+            boolean itemProcessed = false;
 
-                // Build direct target ID query criteria
+            // CASE A: The item has a valid unique ID -> Fetch full configuration from MongoDB
+            if (item.getItemId() != null && !item.getItemId().trim().isEmpty()) {
                 org.springframework.data.mongodb.core.query.Query menuQuery =
                         new org.springframework.data.mongodb.core.query.Query(
                                 org.springframework.data.mongodb.core.query.Criteria.where("id").is(item.getItemId())
@@ -424,7 +438,6 @@ public class CompletedOrderService {
                 com.raghunath.hotelview.entity.MenuItem menuItem =
                         mongoTemplate.findOne(menuQuery, com.raghunath.hotelview.entity.MenuItem.class, "menu_items");
 
-                // Map matching profile records to DTO wrapper arrays
                 if (menuItem != null) {
                     InventoryItemsResponse mappedDto = InventoryItemsResponse.builder()
                             .name(menuItem.getName())
@@ -433,7 +446,20 @@ public class CompletedOrderService {
                             .unit(menuItem.getUnit())
                             .build();
                     targetDetailsList.add(mappedDto);
+                    itemProcessed = true;
                 }
+            }
+
+            // CASE B: FALLBACK FOR INSTANT/CUSTOM ITEMS (No ID or missing from master menu items)
+            if (!itemProcessed) {
+                InventoryItemsResponse fallbackDto = InventoryItemsResponse.builder()
+                        .name(item.getItemName() != null ? item.getItemName() : "Unknown Custom Item")
+                        .price(item.getPrice() != 0 ? String.valueOf(item.getPrice()) : "N/A")
+                        .quantity("N/A")
+                        .unit("N/A")
+                        .build();
+
+                targetDetailsList.add(fallbackDto);
             }
         }
 

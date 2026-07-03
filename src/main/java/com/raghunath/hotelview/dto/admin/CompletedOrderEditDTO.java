@@ -12,7 +12,7 @@ public class CompletedOrderEditDTO {
     @Data
     public static class UpdatedItemPayload {
         private String itemName;
-        private int quantity;
+        private String quantity;
         private Double subTotal;
     }
 }

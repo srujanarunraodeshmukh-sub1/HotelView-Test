@@ -23,6 +23,8 @@ public class MenuItemUpdateDTO {
 
     private Double totalQuantity;
 
+    private String totalquantityUnit;
+
     private String unit;
 
     private String description;

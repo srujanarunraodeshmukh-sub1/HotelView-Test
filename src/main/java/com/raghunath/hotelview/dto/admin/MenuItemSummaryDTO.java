@@ -16,6 +16,7 @@ public class MenuItemSummaryDTO {
     private BigDecimal price;
     private String quantity;
     private Double totalQuantity;
+    private String totalquantityUnit;
     private String unit;
     private Boolean isVeg;
     private Boolean isAvailable;

@@ -51,6 +51,7 @@ public class MenuItemService {
                 .preparationTime(request.getPreparationTime())
                 .quantity(request.getQuantity())
                 .totalQuantity(request.getTotalQuantity()) // 🌟 Map Total Quantity
+                .totalquantityUnit(request.getTotalquantityUnit())
                 .unit(request.getUnit() != null ? request.getUnit().toUpperCase() : "PIECE") // 🌟 Map Unit Matrix
                 .createdAt(now)
                 .updatedAt(now)
@@ -100,6 +101,7 @@ public class MenuItemService {
         existingItem.setPreparationTime(dto.getPreparationTime());
         existingItem.setQuantity(dto.getQuantity());
         existingItem.setTotalQuantity(dto.getTotalQuantity());
+        existingItem.setTotalquantityUnit(dto.getTotalquantityUnit());
         existingItem.setUnit(dto.getUnit());
         existingItem.setUpdatedAt(LocalDateTime.now());
 
@@ -199,6 +201,9 @@ public class MenuItemService {
                 .isAvailable(item.getIsAvailable())
                 .imageUrl(item.getImageUrl())
                 .quantity(item.getQuantity())
+                .totalQuantity(item.getTotalQuantity())
+                .totalquantityUnit(item.getTotalquantityUnit())
+                .unit(item.getUnit())
                 .build();
     }
 }
