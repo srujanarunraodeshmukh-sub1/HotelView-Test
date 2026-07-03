@@ -67,6 +67,8 @@ public class SecurityConfig {
                                 "/api/v1/sync/test-bump",
                                 "/api/v1/admin/refresh-token",
                                 "/api/v1/employees/refresh-token",
+                                "/api/v1/orders/completed/terms",
+                                "/api/v1/orders/completed/privacy",
                                 "/api/v1/info/**",
                                 "/api/v1/orders/webhook",
                                 "/ws-node/**"
@@ -104,6 +106,7 @@ public class SecurityConfig {
 
 
                         // 5. ORDER & SALES OPERATIONS (Admin + Waiter)
+                        .requestMatchers("/api/v1/orders/completed/*/inventory-profiles").hasRole("ADMIN")
                         .requestMatchers("/api/v1/orders/summary/completed/**").hasRole("ADMIN")
                         .requestMatchers(
                                 "/api/v1/orders/draft/**",

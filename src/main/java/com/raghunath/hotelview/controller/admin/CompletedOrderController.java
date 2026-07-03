@@ -1,6 +1,7 @@
 package com.raghunath.hotelview.controller.admin;
 
 import com.raghunath.hotelview.dto.admin.DeliverySummaryDTO;
+import com.raghunath.hotelview.dto.admin.InventoryItemsResponse;
 import com.raghunath.hotelview.dto.admin.ReceiptResponse;
 import com.raghunath.hotelview.dto.admin.SalesAnalyticsDTO;
 import com.raghunath.hotelview.entity.CompletedOrder;
@@ -106,5 +107,16 @@ public class CompletedOrderController {
     public ResponseEntity<List<org.bson.Document>> getDeletedOrders() {
         String hotelId = SecurityContextHolder.getContext().getAuthentication().getName();
         return ResponseEntity.ok(completedOrderService.getDeletedOrders(hotelId));
+    }
+
+    @GetMapping("/{orderId}/inventory-profiles")
+    public ResponseEntity<List<InventoryItemsResponse>> getBillInventoryFootprints(
+            @PathVariable String orderId) {
+
+        String hotelId = org.springframework.security.core.context.SecurityContextHolder
+                .getContext().getAuthentication().getName();
+
+        List<InventoryItemsResponse> responsePayload = completedOrderService.getOrderInventoryDetails(hotelId, orderId);
+        return ResponseEntity.ok(responsePayload);
     }
 }

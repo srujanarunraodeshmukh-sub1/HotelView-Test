@@ -13,5 +13,6 @@ public class CompletedOrderEditDTO {
     public static class UpdatedItemPayload {
         private String itemName;
         private int quantity;
+        private Double subTotal;
     }
 }

@@ -1,17 +1,11 @@
 package com.raghunath.hotelview.service.admin;
 
-import com.raghunath.hotelview.dto.admin.CompletedOrderEditDTO;
-import com.raghunath.hotelview.dto.admin.DeliverySummaryDTO;
-import com.raghunath.hotelview.dto.admin.OrderItem;
-import com.raghunath.hotelview.dto.admin.ReceiptResponse;
+import com.raghunath.hotelview.dto.admin.*;
 import com.raghunath.hotelview.entity.Admin;
 import com.raghunath.hotelview.entity.CompletedOrder;
 import com.raghunath.hotelview.entity.CustomerDetails;
 import com.raghunath.hotelview.entity.KitchenOrder;
-import com.raghunath.hotelview.repository.AdminRepository;
-import com.raghunath.hotelview.repository.CompleteOrderRepository;
-import com.raghunath.hotelview.repository.KitchenOrderRepository;
-import com.raghunath.hotelview.repository.TableRepository;
+import com.raghunath.hotelview.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,10 +27,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -49,6 +40,7 @@ public class CompletedOrderService {
     private final KitchenOrderRepository kitchenOrderRepository;
     private final TableRepository tableRepository;
     private final VersionService versionService;
+    private final MenuItemRepository menuItemRepository;
 
     @Autowired
     private MongoTemplate mongoTemplate;
@@ -213,7 +205,7 @@ public class CompletedOrderService {
 
         List<OrderItem> dbItems = order.getAllOrders().get(0).getItems();
 
-        // 🌟 3. MAP NEW QUANTITIES DIRECTLY (Allowing 0, No price/subtotal math calculations)
+        // 🌟 3. MAP NEW QUANTITIES & SUBTOTALS DIRECTLY FROM FRONTEND
         if (editDto.getItems() != null && !editDto.getItems().isEmpty()) {
             for (CompletedOrderEditDTO.UpdatedItemPayload incomingItem : editDto.getItems()) {
                 OrderItem originalDbItem = dbItems.stream()
@@ -226,8 +218,13 @@ public class CompletedOrderService {
                     throw new RuntimeException("Quantity for '" + incomingItem.getItemName() + "' cannot be negative.");
                 }
 
-                // Directly assign the raw frontend parameter value
+                // Directly assign the raw frontend parameter values
                 originalDbItem.setQuantity(String.valueOf(incomingItem.getQuantity()));
+
+                // 🌟 Save the frontend subtotal if provided, otherwise leave unchanged
+                if (incomingItem.getSubTotal() != null) {
+                    originalDbItem.setSubTotal(incomingItem.getSubTotal());
+                }
             }
         }
 
@@ -248,7 +245,7 @@ public class CompletedOrderService {
 
         // 5. Adjust Customer analytics metrics with final delta shift balance
         double financialDelta = finalTotalPayable - oldTotalPayable;
-        if (StringUtils.hasText(order.getCustomerMobile()) && !"0000000000".equals(order.getCustomerMobile())) {
+        if (org.springframework.util.StringUtils.hasText(order.getCustomerMobile()) && !"0000000000".equals(order.getCustomerMobile())) {
             Query query = new Query(Criteria.where("hotelId").is(hotelId).and("customerMobile").is(order.getCustomerMobile()));
             Update update = new Update().inc("totalAmountPaid", financialDelta);
             mongoTemplate.updateFirst(query, update, CustomerDetails.class);
@@ -390,5 +387,56 @@ public class CompletedOrderService {
             doc.remove("_class");
             return doc;
         }).collect(Collectors.toList());
+    }
+
+    public List<InventoryItemsResponse> getOrderInventoryDetails(String hotelId, String orderId) {
+        // 1. Fetch the master bill tracking instance
+        CompletedOrder order = completeOrderRepository.findById(orderId)
+                .orElseThrow(() -> new RuntimeException("Completed order history record not found"));
+
+        // Tenant protection gate
+        if (!order.getHotelId().equals(hotelId)) {
+            throw new RuntimeException("Unauthorized resource isolation space query rejected");
+        }
+
+        if (order.getAllOrders() == null || order.getAllOrders().isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+
+        // 2. Loop through nested inner structures to gather raw item records
+        List<OrderItem> orderedItems = order.getAllOrders().get(0).getItems();
+        if (orderedItems == null || orderedItems.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+
+        List<InventoryItemsResponse> targetDetailsList = new java.util.ArrayList<>();
+
+        // 🌟 3. MATCH DIRECTLY BY UNIQUE ITEM ID (Resolves the non-unique result error)
+        for (OrderItem item : orderedItems) {
+            if (item.getItemId() != null && !item.getItemId().trim().isEmpty()) {
+
+                // Build direct target ID query criteria
+                org.springframework.data.mongodb.core.query.Query menuQuery =
+                        new org.springframework.data.mongodb.core.query.Query(
+                                org.springframework.data.mongodb.core.query.Criteria.where("id").is(item.getItemId())
+                        );
+
+                com.raghunath.hotelview.entity.MenuItem menuItem =
+                        mongoTemplate.findOne(menuQuery, com.raghunath.hotelview.entity.MenuItem.class, "menu_items");
+
+                // Map matching profile records to DTO wrapper arrays
+                if (menuItem != null) {
+                    InventoryItemsResponse mappedDto = InventoryItemsResponse.builder()
+                            .name(menuItem.getName())
+                            .price(String.valueOf(menuItem.getPrice()))
+                            .quantity(menuItem.getQuantity())
+                            .unit(menuItem.getUnit())
+                            .build();
+                    targetDetailsList.add(mappedDto);
+                }
+            }
+        }
+
+        return targetDetailsList;
     }
 }
