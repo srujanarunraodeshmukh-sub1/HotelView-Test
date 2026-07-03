@@ -83,7 +83,7 @@ public class AdminAuthService {
     }
 
     public LoginResponse register(RegisterRequest request) {
-        // 1. Validation
+        // 1. Core Account Validations
         if (!request.getPassword().equals(request.getConfirmPassword())) {
             throw new RuntimeException("Passwords do not match!");
         }
@@ -92,14 +92,56 @@ public class AdminAuthService {
             throw new RuntimeException("Account already exists. Please login.");
         }
 
-        // 2. Set Start and Expiry (IST)
-        LocalDateTime now = getNowIST();
-        LocalDateTime subscriptionExpiry = now.plusDays(7);
+        // 2. Strict Compliance Acceptance Guards
+        if (request.getPrivacyPolicy() == null || !"accepted".equalsIgnoreCase(request.getPrivacyPolicy().trim())) {
+            throw new RuntimeException("Registration Blocked: The Privacy Policy must be explicitly accepted.");
+        }
 
-        // 3. Generate Incremental Hotel ID using the sequence method
+        if (request.getTermsAndConditions() == null || !"accepted".equalsIgnoreCase(request.getTermsAndConditions().trim())) {
+            throw new RuntimeException("Registration Blocked: The Terms and Conditions must be explicitly accepted.");
+        }
+
+        // 🌟 3. NEW: DYNAMIC DATABASE LEGAL VERSION CROSS-CHECK VERIFICATION
+        // A. Fetch current database Privacy Policy version string metadata
+        org.springframework.data.mongodb.core.query.Query privacyQuery =
+                new org.springframework.data.mongodb.core.query.Query(
+                        org.springframework.data.mongodb.core.query.Criteria.where("doc_type").is("PRIVACY_POLICY")
+                );
+        org.bson.Document dbPrivacyDoc = mongoTemplate.findOne(privacyQuery, org.bson.Document.class, "hotelview_details");
+
+        if (dbPrivacyDoc == null || !dbPrivacyDoc.containsKey("version")) {
+            throw new RuntimeException("System Error: Reference Privacy Policy tracking master metadata missing.");
+        }
+        String expectedPrivacyVersion = dbPrivacyDoc.getString("version");
+
+        if (!expectedPrivacyVersion.equals(request.getPrivacyPolicyVersion())) {
+            throw new RuntimeException("Registration Blocked: Privacy Policy version mismatch.");
+        }
+
+        // B. Fetch current database Terms & Conditions version string metadata
+        org.springframework.data.mongodb.core.query.Query termsQuery =
+                new org.springframework.data.mongodb.core.query.Query(
+                        org.springframework.data.mongodb.core.query.Criteria.where("doc_type").is("TERMS_AND_CONDITIONS")
+                );
+        org.bson.Document dbTermsDoc = mongoTemplate.findOne(termsQuery, org.bson.Document.class, "hotelview_details");
+
+        if (dbTermsDoc == null || !dbTermsDoc.containsKey("version")) {
+            throw new RuntimeException("System Error: Reference Terms and Conditions tracking master metadata missing.");
+        }
+        String expectedTermsVersion = dbTermsDoc.getString("version");
+
+        if (!expectedTermsVersion.equals(request.getTermsAndConditionsVersion())) {
+            throw new RuntimeException("Registration Blocked: Terms & Conditions version mismatch.");
+        }
+
+        // 4. Set Start and Expiry (IST Timeline Loops)
+        java.time.LocalDateTime now = getNowIST();
+        java.time.LocalDateTime subscriptionExpiry = now.plusDays(7);
+
+        // 5. Generate Incremental Hotel ID using the sequence method
         String incrementalHotelId = generateIncrementalHotelId();
 
-        // 4. Create and Save New Admin (Setting default states)
+        // 6. Create and Save New Admin Document Workspace
         Admin newAdmin = Admin.builder()
                 .name(request.getName())
                 .mobile(request.getMobile())
@@ -111,6 +153,13 @@ public class AdminAuthService {
                 .subscriptionExpiry(subscriptionExpiry)
                 .planType("Free Tier")
                 .maxLogins(1)
+
+                // Save confirmed, verified database matching versions
+                .privacyPolicyStatus("accepted (" + expectedPrivacyVersion + ")")
+                .privacyPolicySignedAt(now)
+
+                .termsAndConditionsStatus("accepted (" + expectedTermsVersion + ")")
+                .termsSignedAt(now)
                 .build();
 
         Admin savedAdmin = adminRepository.save(newAdmin);

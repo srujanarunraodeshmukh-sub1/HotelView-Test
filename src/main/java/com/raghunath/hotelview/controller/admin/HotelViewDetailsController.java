@@ -21,7 +21,13 @@ public class HotelViewDetailsController {
 
     @GetMapping("/terms")
     public ResponseEntity<Document> getTerms() {
-        Document data = detailsService.getTermsAndPrivacy();
+        Document data = detailsService.getTermsAndConditions();
+        return data != null ? ResponseEntity.ok(data) : ResponseEntity.notFound().build();
+    }
+
+    @GetMapping("/privacy")
+    public ResponseEntity<Document> getPrivacy() {
+        Document data = detailsService.getPrivacyPolicy();
         return data != null ? ResponseEntity.ok(data) : ResponseEntity.notFound().build();
     }
 

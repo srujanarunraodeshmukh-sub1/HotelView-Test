@@ -53,6 +53,12 @@ public class Admin {
     private String restaurantLogo;
     private String restaurantUpi;
 
+    private String privacyPolicyStatus;
+    private java.time.LocalDateTime privacyPolicySignedAt;
+
+    private String termsAndConditionsStatus;
+    private java.time.LocalDateTime termsSignedAt;
+
     private String greeting;
 
     private Map<String, String> platformIds = new HashMap<>();

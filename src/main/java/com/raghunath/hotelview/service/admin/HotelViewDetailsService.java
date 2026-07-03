@@ -22,9 +22,15 @@ public class HotelViewDetailsService {
         return mongoTemplate.findOne(query, Document.class, "hotelview_details");
     }
 
-    // Fetches Terms and Privacy Policy
-    public Document getTermsAndPrivacy() {
-        Query query = new Query(Criteria.where("parent_entity").is("Madhava Global"));
+    // Fetches Terms and Conditions strictly
+    public Document getTermsAndConditions() {
+        Query query = new Query(Criteria.where("doc_type").is("TERMS_AND_CONDITIONS"));
+        return mongoTemplate.findOne(query, Document.class, "hotelview_details");
+    }
+
+    // Fetches Privacy Policy strictly
+    public Document getPrivacyPolicy() {
+        Query query = new Query(Criteria.where("doc_type").is("PRIVACY_POLICY"));
         return mongoTemplate.findOne(query, Document.class, "hotelview_details");
     }
 
