@@ -1,6 +1,7 @@
 package com.raghunath.hotelview.config;
 
 import com.raghunath.hotelview.security.JwtAuthenticationFilter;
+import com.raghunath.hotelview.security.RateLimitingFilter; // 🌟 Imported your new filter
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -29,6 +30,7 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final RateLimitingFilter rateLimitingFilter; // 🌟 Injected the rate limiting protection filter
 
     @Bean
     public BCryptPasswordEncoder passwordEncoder() {
@@ -67,8 +69,8 @@ public class SecurityConfig {
                                 "/api/v1/sync/test-bump",
                                 "/api/v1/admin/refresh-token",
                                 "/api/v1/employees/refresh-token",
-                                "/api/v1/orders/completed/terms",
-                                "/api/v1/orders/completed/privacy",
+                                "/api/v1/info/terms",
+                                "/api/v1/info/privacy",
                                 "/api/v1/info/**",
                                 "/api/v1/orders/webhook",
                                 "/ws-node/**"
@@ -143,6 +145,8 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
 
+                // 🌟 PROTECT SYSTEM: Intercept & drop brute-force attacks at edge layer before spending RAM evaluating JWT tokens
+                .addFilterBefore(rateLimitingFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .formLogin(form -> form.disable())
                 .httpBasic(basic -> basic.disable());
@@ -167,7 +171,7 @@ public class SecurityConfig {
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource(); //  Corrected
         source.registerCorsConfiguration("/**", configuration);
         return source;
     }
