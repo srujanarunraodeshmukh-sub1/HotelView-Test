@@ -163,7 +163,8 @@ public class SecurityConfig {
                 "https://hotelview-tau.vercel.app",
                 "http://localhost",
                 "https://localhost",
-                "capacitor://localhost"
+                "capacitor://localhost",
+                "https://www.madhavaglobal.in"
         ));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
