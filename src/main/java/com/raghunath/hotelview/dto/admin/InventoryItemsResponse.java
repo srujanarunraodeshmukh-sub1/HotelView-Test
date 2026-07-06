@@ -7,7 +7,8 @@ import lombok.Data;
 @Builder
 public class InventoryItemsResponse {
     private String name;
-    private String price;     // Mapped to match String format in image_ce1a11.png
-    private String quantity;  // e.g., "1 Liter"
-    private String unit;      // e.g., "LITER"
+    private String price;
+    private String quantity;
+    private String unit;
+    private Boolean isPresent;
 }

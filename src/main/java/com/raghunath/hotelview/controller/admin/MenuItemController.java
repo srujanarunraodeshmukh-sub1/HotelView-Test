@@ -98,4 +98,10 @@ public class MenuItemController {
             @Valid @RequestBody MenuItemUpdateDTO updateRequest) {
         return ResponseEntity.ok(menuItemService.updateMenuItem(getHotelId(), itemId, updateRequest));
     }
+
+    @DeleteMapping("/{itemId}")
+    public ResponseEntity<ApiResponse> deleteMenuItem(@PathVariable String itemId) {
+        String message = menuItemService.softDeleteMenuItem(getHotelId(), itemId);
+        return ResponseEntity.ok(new ApiResponse(message));
+    }
 }

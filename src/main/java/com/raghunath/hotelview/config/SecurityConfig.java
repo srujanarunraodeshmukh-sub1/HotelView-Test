@@ -133,9 +133,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/receipt-settings/**").hasRole("ADMIN")
 
                         // 6. MENU & SYNC OPERATIONS
+                        .requestMatchers(HttpMethod.DELETE, "/api/v1/menu/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/menu/version").hasAnyRole("ADMIN", "WAITER", "CHEF")
                         .requestMatchers(HttpMethod.POST, "/api/v1/menu/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.DELETE, "/api/v1/menu/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/v1/menu/**").authenticated()
 
                         // 7. ACCOUNT OPERATIONS

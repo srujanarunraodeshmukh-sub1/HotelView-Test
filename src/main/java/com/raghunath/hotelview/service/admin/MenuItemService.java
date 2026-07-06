@@ -73,6 +73,7 @@ public class MenuItemService {
                 .collect(Collectors.toList());
     }
 
+
     // ====================================================================
     // WRITE: Updates details and evicts cache mapping for this specific hotel
     // ====================================================================
@@ -100,9 +101,12 @@ public class MenuItemService {
         existingItem.setImageUrl(dto.getImageUrl());
         existingItem.setPreparationTime(dto.getPreparationTime());
         existingItem.setQuantity(dto.getQuantity());
+
+        // 🌟 Robust Inventory & Casing Mapping Updates
         existingItem.setTotalQuantity(dto.getTotalQuantity());
         existingItem.setTotalquantityUnit(dto.getTotalquantityUnit());
-        existingItem.setUnit(dto.getUnit());
+        existingItem.setUnit(dto.getUnit() != null ? dto.getUnit().toUpperCase() : existingItem.getUnit());
+
         existingItem.setUpdatedAt(LocalDateTime.now());
 
         MenuItem savedItem = menuItemRepository.save(existingItem);
@@ -205,5 +209,26 @@ public class MenuItemService {
                 .totalquantityUnit(item.getTotalquantityUnit())
                 .unit(item.getUnit())
                 .build();
+    }
+
+    // ====================================================================
+    // WRITE: Soft deletes item & atomically clears affected hotel buckets
+    // ====================================================================
+    @Caching(evict = {
+            @CacheEvict(value = "menuSummaryCache", key = "#hotelId"),
+            @CacheEvict(value = "menuCache", key = "#hotelId"),
+            @CacheEvict(value = "dashboardStatsCache", key = "#hotelId")
+    })
+    public String softDeleteMenuItem(String hotelId, String itemId) {
+        MenuItem existingItem = menuItemRepository.findByHotelIdAndId(hotelId, itemId)
+                .orElseThrow(() -> new RuntimeException("Menu item not found or unauthorized access"));
+
+        // Soft delete toggle flags
+        existingItem.setIsApproved(false);
+        existingItem.setIsAvailable(false);
+        existingItem.setUpdatedAt(LocalDateTime.now()); // Increments version changes for client sync workers
+
+        menuItemRepository.save(existingItem);
+        return "Menu item '" + existingItem.getName() + "' deleted successfully.";
     }
 }

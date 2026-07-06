@@ -408,58 +408,55 @@ public class CompletedOrderService {
         }
 
         if (order.getAllOrders() == null || order.getAllOrders().isEmpty()) {
-            return java.util.Collections.emptyList();
+            return Collections.emptyList();
         }
 
-        // 🌟 2. THE FIX: Use Java Streams to dynamically extract all items from all order blocks
-        // This entirely bypasses the need to explicitly name the 'SubOrder' class!
+        // 2. Extract all items from all order blocks
         List<OrderItem> allOrderedItems = order.getAllOrders().stream()
                 .filter(subOrderBlock -> subOrderBlock != null && subOrderBlock.getItems() != null)
                 .flatMap(subOrderBlock -> subOrderBlock.getItems().stream())
-                .collect(java.util.stream.Collectors.toList());
+                .collect(Collectors.toList());
 
         if (allOrderedItems.isEmpty()) {
-            return java.util.Collections.emptyList();
+            return Collections.emptyList();
         }
 
-        List<InventoryItemsResponse> targetDetailsList = new java.util.ArrayList<>();
+        List<InventoryItemsResponse> targetDetailsList = new ArrayList<>();
 
-        // 3. Loop through the combined master list of all items on this bill
+        // 3. Loop through all items
         for (OrderItem item : allOrderedItems) {
-            boolean itemProcessed = false;
+            boolean foundInMenu = false;
 
-            // CASE A: The item has a valid unique ID -> Fetch full configuration from MongoDB
-            if (item.getItemId() != null && !item.getItemId().trim().isEmpty()) {
-                org.springframework.data.mongodb.core.query.Query menuQuery =
-                        new org.springframework.data.mongodb.core.query.Query(
-                                org.springframework.data.mongodb.core.query.Criteria.where("id").is(item.getItemId())
-                        );
+            // CASE A: Has valid itemId and not EXTERNAL — fetch from menu_items
+            if (item.getItemId() != null
+                    && !item.getItemId().trim().isEmpty()
+                    && !item.getItemId().equals("EXTERNAL")) {
+
+                Query menuQuery = new Query(
+                        Criteria.where("_id").is(item.getItemId())
+                );
 
                 com.raghunath.hotelview.entity.MenuItem menuItem =
                         mongoTemplate.findOne(menuQuery, com.raghunath.hotelview.entity.MenuItem.class, "menu_items");
 
                 if (menuItem != null) {
-                    InventoryItemsResponse mappedDto = InventoryItemsResponse.builder()
+                    targetDetailsList.add(InventoryItemsResponse.builder()
                             .name(menuItem.getName())
                             .price(String.valueOf(menuItem.getPrice()))
                             .quantity(menuItem.getQuantity())
                             .unit(menuItem.getUnit())
-                            .build();
-                    targetDetailsList.add(mappedDto);
-                    itemProcessed = true;
+                            .isPresent(true)
+                            .build());
+                    foundInMenu = true;
                 }
             }
 
-            // CASE B: FALLBACK FOR INSTANT/CUSTOM ITEMS (No ID or missing from master menu items)
-            if (!itemProcessed) {
-                InventoryItemsResponse fallbackDto = InventoryItemsResponse.builder()
-                        .name(item.getItemName() != null ? item.getItemName() : "Unknown Custom Item")
-                        .price(item.getPrice() != 0 ? String.valueOf(item.getPrice()) : "N/A")
-                        .quantity("N/A")
-                        .unit("N/A")
-                        .build();
-
-                targetDetailsList.add(fallbackDto);
+            // CASE B: Not found in menu — return name + isPresent: false only
+            if (!foundInMenu) {
+                targetDetailsList.add(InventoryItemsResponse.builder()
+                        .name(item.getItemName() != null ? item.getItemName() : "Unknown Item")
+                        .isPresent(false)
+                        .build());
             }
         }
 
