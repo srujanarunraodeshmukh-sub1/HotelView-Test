@@ -295,7 +295,9 @@ public class OrderService {
             @CacheEvict(value = "orderCache", key = "#hotelId + '-today'"),
             @CacheEvict(value = "orderCache", key = "#hotelId + '-week'"),
             @CacheEvict(value = "orderCache", key = "#hotelId + '-month'"),
-            @CacheEvict(value = "orderCache", key = "#hotelId + '-year'")
+            @CacheEvict(value = "orderCache", key = "#hotelId + '-year'"),
+            @CacheEvict(value = "menuSummaryCache", key = "#hotelId"),
+            @CacheEvict(value = "menuCache", key = "#hotelId")
     })
     @Transactional
     public CheckoutResponse checkoutOrders(String hotelId, CheckoutRequest request, String checkoutBy) {
@@ -419,7 +421,9 @@ public class OrderService {
             @CacheEvict(value = "orderCache", key = "#hotelId + '-today'"),
             @CacheEvict(value = "orderCache", key = "#hotelId + '-week'"),
             @CacheEvict(value = "orderCache", key = "#hotelId + '-month'"),
-            @CacheEvict(value = "orderCache", key = "#hotelId + '-year'")
+            @CacheEvict(value = "orderCache", key = "#hotelId + '-year'"),
+            @CacheEvict(value = "menuSummaryCache", key = "#hotelId"),
+            @CacheEvict(value = "menuCache", key = "#hotelId")
     })
     @Transactional
     public CheckoutResponse instantOrderAndCheckout(String hotelId, InstantCheckoutRequest request, String actualLoggedInUser) {
