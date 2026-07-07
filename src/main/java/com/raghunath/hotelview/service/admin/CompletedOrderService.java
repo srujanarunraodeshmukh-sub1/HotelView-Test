@@ -186,166 +186,6 @@ public class CompletedOrderService {
     }
 
     /**
-     * 11. EDIT COMPLETED ORDER (Strict Overrides, 7-Day Limit & Inventory Stock Sync)
-     * Overwrites quantities directly (allowing 0), saves historical billing totals,
-     * adjusts inventory dynamically depending on item unit calculations,
-     * and strictly restricts modifications to within 7 days of the checkout date.
-     */
-    @Caching(evict = {
-            @CacheEvict(value = "dashboardStatsCache", key = "#hotelId"),
-            @CacheEvict(value = "orderCache", key = "#hotelId + '-today'"),
-            @CacheEvict(value = "orderCache", key = "#hotelId + '-week'"),
-            @CacheEvict(value = "orderCache", key = "#hotelId + '-month'"),
-            @CacheEvict(value = "orderCache", key = "#hotelId + '-year'")
-    })
-    @Transactional
-    public void editCompletedOrderDetails(String hotelId, String orderId, CompletedOrderEditDTO editDto) {
-        // 1. Fetch original order from DB
-        CompletedOrder order = completeOrderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Completed order record not found"));
-
-        if (!order.getHotelId().equals(hotelId)) {
-            throw new RuntimeException("Unauthorized action on this resource workspace");
-        }
-
-        if (order.getCheckoutDate() != null) {
-            try {
-                java.time.LocalDate checkoutDate = java.time.LocalDate.parse(order.getCheckoutDate());
-                java.time.LocalDate todayIST = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
-
-                if (checkoutDate.plusDays(7).isBefore(todayIST)) {
-                    throw new RuntimeException("Modification denied: This completed order is older than 7 days.");
-                }
-            } catch (java.time.format.DateTimeParseException e) {
-                log.error("DATE_PARSE_ERROR: Failed to validate checkout timeline for order {}", orderId);
-            }
-        }
-
-        if (order.getAllOrders() == null || order.getAllOrders().isEmpty()) {
-            throw new RuntimeException("This completed order contains no inner order structural array elements");
-        }
-
-        List<OrderItem> dbItems = order.getAllOrders().get(0).getItems();
-
-        // 3. MAP NEW QUANTITIES & SUBTOTALS DIRECTLY FROM FRONTEND + ADJUST STOCK
-        if (editDto.getItems() != null && !editDto.getItems().isEmpty()) {
-            for (CompletedOrderEditDTO.UpdatedItemPayload incomingItem : editDto.getItems()) {
-
-                // Sanitize incoming item name inline
-                String incomingNameClean = incomingItem.getItemName() != null ? incomingItem.getItemName().trim() : "";
-                incomingNameClean = incomingNameClean.contains("//") ? incomingNameClean.split("//")[0].trim() : incomingNameClean;
-
-                String finalIncomingName = incomingNameClean;
-                OrderItem originalDbItem = dbItems.stream()
-                        .filter(item -> item.getItemName().equalsIgnoreCase(finalIncomingName))
-                        .findFirst()
-                        .orElseThrow(() -> new RuntimeException("Item '" + finalIncomingName +
-                                "' does not exist in the original bill. Only modifications are allowed."));
-
-                if (incomingItem.getQuantity() != null) {
-                    // Sanitize original quantity inline
-                    String cleanOldQtyStr = originalDbItem.getQuantity() != null ? originalDbItem.getQuantity().trim().toLowerCase() : "1";
-                    cleanOldQtyStr = cleanOldQtyStr.contains("//") ? cleanOldQtyStr.split("//")[0].trim() : cleanOldQtyStr;
-
-                    // Sanitize incoming quantity inline
-                    String cleanNewQtyStr = incomingItem.getQuantity().trim().toLowerCase();
-                    cleanNewQtyStr = cleanNewQtyStr.contains("//") ? cleanNewQtyStr.split("//")[0].trim() : cleanNewQtyStr;
-
-                    double oldNumericValue = 1.0;
-                    double newNumericValue = 1.0;
-
-                    try {
-                        String oldNumericPart = cleanOldQtyStr.replaceAll("[^0-9.]", "");
-                        if (org.springframework.util.StringUtils.hasText(oldNumericPart)) {
-                            oldNumericValue = Double.parseDouble(oldNumericPart);
-                        }
-
-                        String newNumericPart = cleanNewQtyStr.replaceAll("[^0-9.]", "");
-                        if (org.springframework.util.StringUtils.hasText(newNumericPart)) {
-                            newNumericValue = Double.parseDouble(newNumericPart);
-                        }
-                    } catch (Exception e) {
-                        throw new RuntimeException("Quantity for '" + originalDbItem.getItemName() + "' must contain valid numeric configurations.");
-                    }
-
-                    if (newNumericValue < 0) {
-                        throw new RuntimeException("Quantity for '" + originalDbItem.getItemName() + "' cannot be negative.");
-                    }
-
-                    // --- INVENTORY STOCK SYNC LOGIC ---
-                    String itemUnit = originalDbItem.getUnit() != null ? originalDbItem.getUnit().toUpperCase() : "PIECE";
-
-                    double oldCalculatedDeduction = oldNumericValue;
-                    double newCalculatedDeduction = newNumericValue;
-
-                    if (cleanOldQtyStr.contains("ml") && "LITER".equals(itemUnit)) {
-                        oldCalculatedDeduction = oldNumericValue / 1000.0;
-                    } else if (cleanOldQtyStr.contains("gm") && "KG".equals(itemUnit)) {
-                        oldCalculatedDeduction = oldNumericValue / 1000.0;
-                    }
-
-                    if (cleanNewQtyStr.contains("ml") && "LITER".equals(itemUnit)) {
-                        newCalculatedDeduction = newNumericValue / 1000.0;
-                    } else if (cleanNewQtyStr.contains("gm") && "KG".equals(itemUnit)) {
-                        newCalculatedDeduction = newNumericValue / 1000.0;
-                    }
-
-                    double inventoryStockAdjustmentDelta = newCalculatedDeduction - oldCalculatedDeduction;
-
-                    if (inventoryStockAdjustmentDelta != 0.0) {
-                        try {
-                            Query stockQuery = new Query(Criteria.where("hotelId").is(hotelId)
-                                    .and("name").regex("^" + java.util.regex.Pattern.quote(originalDbItem.getItemName()) + "$", "i"));
-
-                            Update stockUpdate = new Update().inc("totalQuantity", -inventoryStockAdjustmentDelta);
-                            mongoTemplate.updateFirst(stockQuery, stockUpdate, com.raghunath.hotelview.entity.MenuItem.class);
-
-                            log.info("INVENTORY_EDIT_SYNC: Syncing item '{}'. Net Adjustment Action: {}",
-                                    originalDbItem.getItemName(), -inventoryStockAdjustmentDelta);
-                        } catch (Exception e) {
-                            log.error("INVENTORY_EDIT_CRITICAL_ERR: Failed stock adjustment processing for item '{}'", originalDbItem.getItemName(), e);
-                        }
-                    }
-
-                    originalDbItem.setQuantity(cleanNewQtyStr);
-                }
-
-                if (incomingItem.getSubTotal() != null) {
-                    originalDbItem.setSubTotal(incomingItem.getSubTotal());
-                }
-            }
-        }
-
-        // 4. FINANCIAL HISTORY TRACKING & STRICT TOTAL PAYABLE OVERRIDE
-        if (editDto.getCustomTotalPayable() == null) {
-            throw new RuntimeException("Total payable field value must be explicitly provided for this update operation.");
-        }
-
-        double oldTotalPayable = order.getTotalPayable() != null ? order.getTotalPayable() : 0.0;
-        double finalTotalPayable = Math.max(0.0, editDto.getCustomTotalPayable());
-
-        order.setLastTotalPayable(oldTotalPayable);
-        order.setTotalPayable(finalTotalPayable);
-
-        if (editDto.getDiscountPercent() != null) {
-            order.setDiscountPercent(editDto.getDiscountPercent());
-        }
-
-        completeOrderRepository.save(order);
-
-        // 5. Adjust Customer analytics metrics
-        double financialDelta = finalTotalPayable - oldTotalPayable;
-        if (org.springframework.util.StringUtils.hasText(order.getCustomerMobile()) && !"0000000000".equals(order.getCustomerMobile())) {
-            Query query = new Query(Criteria.where("hotelId").is(hotelId).and("customerMobile").is(order.getCustomerMobile()));
-            Update update = new Update().inc("totalAmountPaid", financialDelta);
-            mongoTemplate.updateFirst(query, update, CustomerDetails.class);
-        }
-
-        log.info("EDIT_COMPLETED: Order {} processed safely. Historical Total: {}, New Override Total: {}, Delta Shift: {}",
-                orderId, oldTotalPayable, finalTotalPayable, financialDelta);
-    }
-
-    /**
      * 12. DELETE COMPLETED ORDER: Completely wipes out a bill document from the database collections
      * and reverses the customer's aggregate stats to keep financial indicators synchronized.
      */
@@ -477,6 +317,219 @@ public class CompletedOrderService {
             doc.remove("_class");
             return doc;
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * 11. EDIT COMPLETED ORDER (Strict Overrides, 7-Day Limit & Inventory Stock Sync)
+     * Overwrites quantities directly across all multi-block sub-orders, saves historical billing totals,
+     * adjusts inventory dynamically depending on item unit calculations,
+     * and strictly restricts modifications to within 7 days of the checkout date.
+     */
+    /**
+     * 11. EDIT COMPLETED ORDER (Strict Overrides, 7-Day Limit, Inventory Stock Sync & Dynamic Financial Mapping)
+     * Overwrites quantities directly across all multi-block sub-orders, applies frontend financial values directly,
+     * recalculates inner kitchen order totals dynamically, and syncs stock adjustments safely.
+     */
+    @Caching(evict = {
+            @CacheEvict(value = "dashboardStatsCache", key = "#hotelId"),
+            @CacheEvict(value = "orderCache", key = "#hotelId + '-today'"),
+            @CacheEvict(value = "orderCache", key = "#hotelId + '-week'"),
+            @CacheEvict(value = "orderCache", key = "#hotelId + '-month'"),
+            @CacheEvict(value = "orderCache", key = "#hotelId + '-year'")
+    })
+    @Transactional
+    public void editCompletedOrderDetails(String hotelId, String orderId, CompletedOrderEditDTO editDto) {
+        System.out.println("[DEBUG START] Hitting editCompletedOrderDetails for orderId: " + orderId);
+
+        // 1. Fetch original order from DB
+        CompletedOrder order = completeOrderRepository.findById(orderId)
+                .orElseThrow(() -> new RuntimeException("Completed order record not found"));
+
+        System.out.println("[DEBUG] Order fetched successfully. Hotel ID from DB: " + order.getHotelId() + " | Provided Hotel ID: " + hotelId);
+
+        if (!order.getHotelId().equals(hotelId)) {
+            throw new RuntimeException("Unauthorized action on this resource workspace");
+        }
+
+        if (order.getCheckoutDate() != null) {
+            try {
+                java.time.LocalDate checkoutDate = java.time.LocalDate.parse(order.getCheckoutDate());
+                java.time.LocalDate todayIST = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
+                System.out.println("[DEBUG] Timeline validation -> Checkout Date: " + checkoutDate + " | Today: " + todayIST);
+
+                if (checkoutDate.plusDays(7).isBefore(todayIST)) {
+                    throw new RuntimeException("Modification denied: This completed order is older than 7 days.");
+                }
+            } catch (java.time.format.DateTimeParseException e) {
+                log.error("DATE_PARSE_ERROR: Failed to validate checkout timeline for order {}", orderId);
+            }
+        }
+
+        if (order.getAllOrders() == null || order.getAllOrders().isEmpty()) {
+            throw new RuntimeException("This completed order contains no inner order structural array elements");
+        }
+
+        // Print all items that actually exist inside this document before filtering
+        System.out.println("[DEBUG] --- Listing ALL items currently inside the database document ---");
+        order.getAllOrders().stream()
+                .filter(ko -> ko != null && ko.getItems() != null)
+                .flatMap(ko -> ko.getItems().stream())
+                .forEach(item -> System.out.println(" -> Found DB Item Name: '" + item.getItemName() + "' [Length: " + (item.getItemName() != null ? item.getItemName().length() : 0) + "]"));
+        System.out.println("[DEBUG] ---------------------------------------------------------------");
+
+        // 3. MAP NEW QUANTITIES, SUBTOTALS, AND DYNAMICALLY ADJUST INVENTORY
+        if (editDto.getItems() != null && !editDto.getItems().isEmpty()) {
+            for (CompletedOrderEditDTO.UpdatedItemPayload incomingItem : editDto.getItems()) {
+
+                System.out.println("[DEBUG] Processing incoming item payload element -> Name: '" + incomingItem.getItemName() + "'");
+
+                // Sanitize incoming item name inline
+                String incomingNameClean = incomingItem.getItemName() != null ? incomingItem.getItemName().trim() : "";
+                incomingNameClean = incomingNameClean.contains("//") ? incomingNameClean.split("//")[0].trim() : incomingNameClean;
+                String finalIncomingName = incomingNameClean;
+
+                System.out.println("[DEBUG] Sanitized Payload Item Name to match: '" + finalIncomingName + "' [Length: " + finalIncomingName.length() + "]");
+
+                // Scan across every single sub-order array element to locate the live reference object
+                OrderItem originalDbItem = order.getAllOrders().stream()
+                        .filter(ko -> ko != null && ko.getItems() != null)
+                        .flatMap(ko -> ko.getItems().stream())
+                        .filter(item -> {
+                            if (item == null || item.getItemName() == null) return false;
+
+                            // Strip out hidden newlines (\r, \n), spaces, and convert to lowercase
+                            String cleanDbName = item.getItemName().replaceAll("[\\r\\n]", "").trim().toLowerCase();
+                            String cleanPayloadName = finalIncomingName.replaceAll("[\\r\\n]", "").trim().toLowerCase();
+
+                            boolean matchResult = cleanDbName.equals(cleanPayloadName);
+                            System.out.println("   [FILTER COMPARE] DB Name: '" + cleanDbName + "' vs Payload Name: '" + cleanPayloadName + "' -> Match Status: " + matchResult);
+
+                            return matchResult;
+                        })
+                        .findFirst()
+                        .orElseThrow(() -> {
+                            System.out.println("[CRITICAL ERROR] Matching failed! Throwing item not found exception.");
+                            return new RuntimeException("Item '" + finalIncomingName + "' does not exist in the original bill. Only modifications are allowed.");
+                        });
+
+                System.out.println("[DEBUG] Successfully matched item inside stream! Proceeding to parse metrics for: " + originalDbItem.getItemName());
+
+                if (incomingItem.getQuantity() != null) {
+                    String cleanOldQtyStr = originalDbItem.getQuantity() != null ? originalDbItem.getQuantity().trim().toLowerCase() : "1";
+                    cleanOldQtyStr = cleanOldQtyStr.contains("//") ? cleanOldQtyStr.split("//")[0].trim() : cleanOldQtyStr;
+
+                    String cleanNewQtyStr = incomingItem.getQuantity().trim().toLowerCase();
+                    cleanNewQtyStr = cleanNewQtyStr.contains("//") ? cleanNewQtyStr.split("//")[0].trim() : cleanNewQtyStr;
+
+                    double oldNumericValue = 1.0;
+                    double newNumericValue = 1.0;
+
+                    try {
+                        String oldNumericPart = cleanOldQtyStr.replaceAll("[^0-9.]", "");
+                        if (org.springframework.util.StringUtils.hasText(oldNumericPart)) {
+                            oldNumericValue = Double.parseDouble(oldNumericPart);
+                        }
+
+                        String newNumericPart = cleanNewQtyStr.replaceAll("[^0-9.]", "");
+                        if (org.springframework.util.StringUtils.hasText(newNumericPart)) {
+                            newNumericValue = Double.parseDouble(newNumericPart);
+                        }
+                    } catch (Exception e) {
+                        throw new RuntimeException("Quantity for '" + originalDbItem.getItemName() + "' must contain valid numeric configurations.");
+                    }
+
+                    if (newNumericValue < 0) {
+                        throw new RuntimeException("Quantity for '" + originalDbItem.getItemName() + "' cannot be negative.");
+                    }
+
+                    // --- INVENTORY STOCK SYNC LOGIC ---
+                    String itemUnit = originalDbItem.getUnit() != null ? originalDbItem.getUnit().toUpperCase() : "PIECE";
+
+                    double oldCalculatedDeduction = oldNumericValue;
+                    double newCalculatedDeduction = newNumericValue;
+
+                    if (cleanOldQtyStr.contains("ml") && "LITER".equals(itemUnit)) {
+                        oldCalculatedDeduction = oldNumericValue / 1000.0;
+                    } else if (cleanOldQtyStr.contains("gm") && "KG".equals(itemUnit)) {
+                        oldCalculatedDeduction = oldNumericValue / 1000.0;
+                    }
+
+                    if (cleanNewQtyStr.contains("ml") && "LITER".equals(itemUnit)) {
+                        newCalculatedDeduction = newNumericValue / 1000.0;
+                    } else if (cleanNewQtyStr.contains("gm") && "KG".equals(itemUnit)) {
+                        newCalculatedDeduction = newNumericValue / 1000.0;
+                    }
+
+                    double inventoryStockAdjustmentDelta = newCalculatedDeduction - oldCalculatedDeduction;
+
+                    if (inventoryStockAdjustmentDelta != 0.0) {
+                        try {
+                            Query stockQuery = new Query(Criteria.where("hotelId").is(hotelId)
+                                    .and("name").regex("^" + java.util.regex.Pattern.quote(originalDbItem.getItemName()) + "$", "i"));
+
+                            Update stockUpdate = new Update().inc("totalQuantity", -inventoryStockAdjustmentDelta);
+                            mongoTemplate.updateFirst(stockQuery, stockUpdate, com.raghunath.hotelview.entity.MenuItem.class);
+                            System.out.println("[DEBUG] Stock adjusted for '" + originalDbItem.getItemName() + "' | Shift Balance: " + (-inventoryStockAdjustmentDelta));
+                        } catch (Exception e) {
+                            log.error("INVENTORY_EDIT_CRITICAL_ERR: Failed stock adjustment processing for item '{}'", originalDbItem.getItemName(), e);
+                        }
+                    }
+
+                    originalDbItem.setQuantity(cleanNewQtyStr);
+                }
+
+                if (incomingItem.getSubTotal() != null) {
+                    originalDbItem.setSubTotal(incomingItem.getSubTotal());
+                }
+            }
+        }
+
+        // 🌟 4. RECALCULATE KITCHEN ORDER TOTAL AMOUNT METRICS FOR EACH INNER BLOCK (Subtotal to totalAmount logic)
+        for (KitchenOrder subOrder : order.getAllOrders()) {
+            if (subOrder != null && subOrder.getItems() != null) {
+                double computedBlockTotal = subOrder.getItems().stream()
+                        .filter(java.util.Objects::nonNull)
+                        .mapToDouble(OrderItem::getSubTotal)
+                        .sum();
+                subOrder.setTotalAmount(computedBlockTotal);
+                System.out.println("[DEBUG] Synced KitchenOrder block ID: " + subOrder.getId() + " totalAmount updated to: " + computedBlockTotal);
+            }
+        }
+
+        // 🌟 5. APPLY TOP-LEVEL FINANCIAL OVERRIDES FROM PAYLOAD
+        if (editDto.getGrandTotal() != null) {
+            order.setGrandTotal(editDto.getGrandTotal());
+        }
+        if (editDto.getDiscountAmount() != null) {
+            order.setDiscountAmount(editDto.getDiscountAmount());
+        }
+        if (editDto.getDiscountPercent() != null) {
+            order.setDiscountPercent(editDto.getDiscountPercent());
+        }
+
+        if (editDto.getCustomTotalPayable() == null) {
+            throw new RuntimeException("Total payable field value must be explicitly provided for this update operation.");
+        }
+
+        double oldTotalPayable = order.getTotalPayable() != null ? order.getTotalPayable() : 0.0;
+        double finalTotalPayable = Math.max(0.0, editDto.getCustomTotalPayable());
+
+        order.setLastTotalPayable(oldTotalPayable);
+        order.setTotalPayable(finalTotalPayable);
+
+        // Save completely transformed data structure back to MongoDB
+        completeOrderRepository.save(order);
+        System.out.println("[DEBUG] CompletedOrder record saved to MongoDB database successfully.");
+
+        // 6. Adjust Customer metrics balance
+        double financialDelta = finalTotalPayable - oldTotalPayable;
+        if (org.springframework.util.StringUtils.hasText(order.getCustomerMobile()) && !"0000000000".equals(order.getCustomerMobile())) {
+            Query query = new Query(Criteria.where("hotelId").is(hotelId).and("customerMobile").is(order.getCustomerMobile()));
+            Update update = new Update().inc("totalAmountPaid", financialDelta);
+            mongoTemplate.updateFirst(query, update, CustomerDetails.class);
+        }
+
+        System.out.println("[DEBUG END] Processing finalized successfully without errors.");
     }
 
     public List<InventoryItemsResponse> getOrderInventoryDetails(String hotelId, String orderId) {
