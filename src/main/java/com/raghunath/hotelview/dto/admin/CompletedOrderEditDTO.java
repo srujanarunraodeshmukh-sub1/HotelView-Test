@@ -14,5 +14,6 @@ public class CompletedOrderEditDTO {
         private String itemName;
         private String quantity;
         private Double subTotal;
+        private String unit;
     }
 }

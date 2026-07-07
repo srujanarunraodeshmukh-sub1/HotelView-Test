@@ -24,6 +24,8 @@ public class OrderItem {
     @NotBlank(message = "Quantity/Volume description is required")
     private String quantity;
 
+    private String unit;
+
     @NotNull(message = "Price is required")
     @Min(value = 0, message = "Price cannot be negative")
     private Double price;

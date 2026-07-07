@@ -83,27 +83,49 @@ public class CompletedOrderService {
         CompletedOrder order = completeOrderRepository.findById(orderId)
                 .orElseThrow(() -> new RuntimeException("Order not found"));
 
-        // Security Check: Ensure this order belongs to the hotel in the token
         if (!order.getHotelId().equals(hotelIdFromToken)) {
             throw new RuntimeException("Unauthorized access to this order");
         }
 
-        // 2. Fetch Restaurant Details from Admin Entity
+        // 2. Fetch Restaurant Profile
         Admin admin = adminRepository.findByHotelId(hotelIdFromToken)
                 .orElseThrow(() -> new RuntimeException("Restaurant profile not found"));
 
-        // 3. Flatten all nested items from allOrders array into one list for the receipt
-        List<ReceiptResponse.FlattenedItem> flattenedItems = order.getAllOrders().stream()
-                .flatMap(kitchenOrder -> kitchenOrder.getItems().stream())
-                .map(item -> ReceiptResponse.FlattenedItem.builder()
-                        .itemName(item.getItemName())
-                        .quantity(item.getQuantity())
-                        .price(item.getPrice())
-                        .subTotal(item.getSubTotal())
-                        .build())
-                .collect(Collectors.toList());
+        // 3. Extract items and units straight out of the document in memory
+        List<ReceiptResponse.FlattenedItem> flattenedItems = new ArrayList<>();
+        if (order.getAllOrders() != null) {
+            for (KitchenOrder kitchenOrder : order.getAllOrders()) {
+                if (kitchenOrder == null || kitchenOrder.getItems() == null) continue;
 
-        // 4. Build the final Print-Ready response
+                for (OrderItem item : kitchenOrder.getItems()) {
+                    // Clean trailing noise out of name strings safely inline
+                    String rawName = item.getItemName() != null ? item.getItemName().trim() : "Unknown Item";
+                    rawName = rawName.contains("//") ? rawName.split("//")[0].trim() : rawName;
+
+                    // Clean trailing noise out of quantity strings safely inline
+                    String rawQuantity = item.getQuantity() != null ? item.getQuantity().trim() : "1";
+                    rawQuantity = rawQuantity.contains("//") ? rawQuantity.split("//")[0].trim() : rawQuantity;
+
+                    // Directly read the stored unit from the CompletedOrder document snapshot
+                    String unit = item.getUnit() != null ? item.getUnit().trim() : "PIECE";
+                    unit = unit.contains("//") ? unit.split("//")[0].trim() : unit;
+                    if (unit.isEmpty()) {
+                        unit = "PIECE";
+                    }
+
+                    // 🌟 Populate item name and unit as completely independent properties
+                    flattenedItems.add(ReceiptResponse.FlattenedItem.builder()
+                            .itemName(rawName)      // Cleaned standalone item name (e.g. "Buttermilk")
+                            .unit(unit)             // Cleaned standalone unit (e.g. "LITER")
+                            .quantity(rawQuantity)
+                            .price(item.getPrice())
+                            .subTotal(item.getSubTotal())
+                            .build());
+                }
+            }
+        }
+
+        // 4. Return response payload matching your exact schema layout
         return ReceiptResponse.builder()
                 .restaurantName(admin.getRestaurantName())
                 .restaurantAddress(admin.getRestaurantAddress())
@@ -164,9 +186,9 @@ public class CompletedOrderService {
     }
 
     /**
-     * 11. EDIT COMPLETED ORDER (Strict Overrides & 7-Day Limit)
+     * 11. EDIT COMPLETED ORDER (Strict Overrides, 7-Day Limit & Inventory Stock Sync)
      * Overwrites quantities directly (allowing 0), saves historical billing totals,
-     * uses the direct total payable value from the payload without backend recalculation,
+     * adjusts inventory dynamically depending on item unit calculations,
      * and strictly restricts modifications to within 7 days of the checkout date.
      */
     @Caching(evict = {
@@ -189,7 +211,7 @@ public class CompletedOrderService {
         if (order.getCheckoutDate() != null) {
             try {
                 java.time.LocalDate checkoutDate = java.time.LocalDate.parse(order.getCheckoutDate());
-                java.time.LocalDate todayIST = java.time.LocalDate.now(com.raghunath.hotelview.util.ISTUtil.IST);
+                java.time.LocalDate todayIST = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
 
                 if (checkoutDate.plusDays(7).isBefore(todayIST)) {
                     throw new RuntimeException("Modification denied: This completed order is older than 7 days.");
@@ -205,38 +227,96 @@ public class CompletedOrderService {
 
         List<OrderItem> dbItems = order.getAllOrders().get(0).getItems();
 
-        // 🌟 3. MAP NEW QUANTITIES & SUBTOTALS DIRECTLY FROM FRONTEND
+        // 3. MAP NEW QUANTITIES & SUBTOTALS DIRECTLY FROM FRONTEND + ADJUST STOCK
         if (editDto.getItems() != null && !editDto.getItems().isEmpty()) {
             for (CompletedOrderEditDTO.UpdatedItemPayload incomingItem : editDto.getItems()) {
+
+                // Sanitize incoming item name inline
+                String incomingNameClean = incomingItem.getItemName() != null ? incomingItem.getItemName().trim() : "";
+                incomingNameClean = incomingNameClean.contains("//") ? incomingNameClean.split("//")[0].trim() : incomingNameClean;
+
+                String finalIncomingName = incomingNameClean;
                 OrderItem originalDbItem = dbItems.stream()
-                        .filter(item -> item.getItemName().equalsIgnoreCase(incomingItem.getItemName()))
+                        .filter(item -> item.getItemName().equalsIgnoreCase(finalIncomingName))
                         .findFirst()
-                        .orElseThrow(() -> new RuntimeException("Item '" + incomingItem.getItemName() +
+                        .orElseThrow(() -> new RuntimeException("Item '" + finalIncomingName +
                                 "' does not exist in the original bill. Only modifications are allowed."));
 
-                // 🌟 SAFE STRING QUANTITY CHECK VALIDATION
                 if (incomingItem.getQuantity() != null) {
+                    // Sanitize original quantity inline
+                    String cleanOldQtyStr = originalDbItem.getQuantity() != null ? originalDbItem.getQuantity().trim().toLowerCase() : "1";
+                    cleanOldQtyStr = cleanOldQtyStr.contains("//") ? cleanOldQtyStr.split("//")[0].trim() : cleanOldQtyStr;
+
+                    // Sanitize incoming quantity inline
+                    String cleanNewQtyStr = incomingItem.getQuantity().trim().toLowerCase();
+                    cleanNewQtyStr = cleanNewQtyStr.contains("//") ? cleanNewQtyStr.split("//")[0].trim() : cleanNewQtyStr;
+
+                    double oldNumericValue = 1.0;
+                    double newNumericValue = 1.0;
+
                     try {
-                        double parsedQty = Double.parseDouble(incomingItem.getQuantity().trim());
-                        if (parsedQty < 0) {
-                            throw new RuntimeException("Quantity for '" + incomingItem.getItemName() + "' cannot be negative.");
+                        String oldNumericPart = cleanOldQtyStr.replaceAll("[^0-9.]", "");
+                        if (org.springframework.util.StringUtils.hasText(oldNumericPart)) {
+                            oldNumericValue = Double.parseDouble(oldNumericPart);
                         }
-                    } catch (NumberFormatException e) {
-                        throw new RuntimeException("Quantity for '" + incomingItem.getItemName() + "' must be a valid numeric value.");
+
+                        String newNumericPart = cleanNewQtyStr.replaceAll("[^0-9.]", "");
+                        if (org.springframework.util.StringUtils.hasText(newNumericPart)) {
+                            newNumericValue = Double.parseDouble(newNumericPart);
+                        }
+                    } catch (Exception e) {
+                        throw new RuntimeException("Quantity for '" + originalDbItem.getItemName() + "' must contain valid numeric configurations.");
                     }
 
-                    // Directly assign the raw frontend string value safely
-                    originalDbItem.setQuantity(incomingItem.getQuantity());
+                    if (newNumericValue < 0) {
+                        throw new RuntimeException("Quantity for '" + originalDbItem.getItemName() + "' cannot be negative.");
+                    }
+
+                    // --- INVENTORY STOCK SYNC LOGIC ---
+                    String itemUnit = originalDbItem.getUnit() != null ? originalDbItem.getUnit().toUpperCase() : "PIECE";
+
+                    double oldCalculatedDeduction = oldNumericValue;
+                    double newCalculatedDeduction = newNumericValue;
+
+                    if (cleanOldQtyStr.contains("ml") && "LITER".equals(itemUnit)) {
+                        oldCalculatedDeduction = oldNumericValue / 1000.0;
+                    } else if (cleanOldQtyStr.contains("gm") && "KG".equals(itemUnit)) {
+                        oldCalculatedDeduction = oldNumericValue / 1000.0;
+                    }
+
+                    if (cleanNewQtyStr.contains("ml") && "LITER".equals(itemUnit)) {
+                        newCalculatedDeduction = newNumericValue / 1000.0;
+                    } else if (cleanNewQtyStr.contains("gm") && "KG".equals(itemUnit)) {
+                        newCalculatedDeduction = newNumericValue / 1000.0;
+                    }
+
+                    double inventoryStockAdjustmentDelta = newCalculatedDeduction - oldCalculatedDeduction;
+
+                    if (inventoryStockAdjustmentDelta != 0.0) {
+                        try {
+                            Query stockQuery = new Query(Criteria.where("hotelId").is(hotelId)
+                                    .and("name").regex("^" + java.util.regex.Pattern.quote(originalDbItem.getItemName()) + "$", "i"));
+
+                            Update stockUpdate = new Update().inc("totalQuantity", -inventoryStockAdjustmentDelta);
+                            mongoTemplate.updateFirst(stockQuery, stockUpdate, com.raghunath.hotelview.entity.MenuItem.class);
+
+                            log.info("INVENTORY_EDIT_SYNC: Syncing item '{}'. Net Adjustment Action: {}",
+                                    originalDbItem.getItemName(), -inventoryStockAdjustmentDelta);
+                        } catch (Exception e) {
+                            log.error("INVENTORY_EDIT_CRITICAL_ERR: Failed stock adjustment processing for item '{}'", originalDbItem.getItemName(), e);
+                        }
+                    }
+
+                    originalDbItem.setQuantity(cleanNewQtyStr);
                 }
 
-                // 🌟 Save the frontend subtotal if provided, otherwise leave unchanged
                 if (incomingItem.getSubTotal() != null) {
                     originalDbItem.setSubTotal(incomingItem.getSubTotal());
                 }
             }
         }
 
-        // 🌟 4. FINANCIAL HISTORY TRACKING & STRICT TOTAL PAYABLE OVERRIDE
+        // 4. FINANCIAL HISTORY TRACKING & STRICT TOTAL PAYABLE OVERRIDE
         if (editDto.getCustomTotalPayable() == null) {
             throw new RuntimeException("Total payable field value must be explicitly provided for this update operation.");
         }
@@ -244,14 +324,16 @@ public class CompletedOrderService {
         double oldTotalPayable = order.getTotalPayable() != null ? order.getTotalPayable() : 0.0;
         double finalTotalPayable = Math.max(0.0, editDto.getCustomTotalPayable());
 
-        // Store the primary total payable to history field tracker before overwriting it
         order.setLastTotalPayable(oldTotalPayable);
         order.setTotalPayable(finalTotalPayable);
 
-        // Save back to MongoDB
+        if (editDto.getDiscountPercent() != null) {
+            order.setDiscountPercent(editDto.getDiscountPercent());
+        }
+
         completeOrderRepository.save(order);
 
-        // 5. Adjust Customer analytics metrics with final delta shift balance
+        // 5. Adjust Customer analytics metrics
         double financialDelta = finalTotalPayable - oldTotalPayable;
         if (org.springframework.util.StringUtils.hasText(order.getCustomerMobile()) && !"0000000000".equals(order.getCustomerMobile())) {
             Query query = new Query(Criteria.where("hotelId").is(hotelId).and("customerMobile").is(order.getCustomerMobile()));
@@ -427,15 +509,12 @@ public class CompletedOrderService {
         for (OrderItem item : allOrderedItems) {
             boolean foundInMenu = false;
 
-            // CASE A: Has valid itemId and not EXTERNAL — fetch from menu_items
+            // CASE A: Has valid itemId and not EXTERNAL — fetch from menu_items by explicit ID
             if (item.getItemId() != null
                     && !item.getItemId().trim().isEmpty()
                     && !item.getItemId().equals("EXTERNAL")) {
 
-                Query menuQuery = new Query(
-                        Criteria.where("_id").is(item.getItemId())
-                );
-
+                Query menuQuery = new Query(Criteria.where("_id").is(item.getItemId()));
                 com.raghunath.hotelview.entity.MenuItem menuItem =
                         mongoTemplate.findOne(menuQuery, com.raghunath.hotelview.entity.MenuItem.class, "menu_items");
 
@@ -444,14 +523,35 @@ public class CompletedOrderService {
                             .name(menuItem.getName())
                             .price(String.valueOf(menuItem.getPrice()))
                             .quantity(menuItem.getQuantity())
-                            .unit(menuItem.getUnit())
+                            .unit(menuItem.getUnit() != null ? menuItem.getUnit() : menuItem.getTotalquantityUnit())
                             .isPresent(true)
                             .build());
                     foundInMenu = true;
                 }
             }
 
-            // CASE B: Not found in menu — return name + isPresent: false only
+            // 🌟 FALLBACK CASE: If lookup by ID skipped or returned null, fall back to case-insensitive name mapping
+            if (!foundInMenu && item.getItemName() != null) {
+                String sanitizedName = item.getItemName().trim();
+                Query nameQuery = new Query(Criteria.where("hotelId").is(hotelId)
+                        .and("name").regex("^" + java.util.regex.Pattern.quote(sanitizedName) + "$", "i"));
+
+                com.raghunath.hotelview.entity.MenuItem menuItem =
+                        mongoTemplate.findOne(nameQuery, com.raghunath.hotelview.entity.MenuItem.class, "menu_items");
+
+                if (menuItem != null) {
+                    targetDetailsList.add(InventoryItemsResponse.builder()
+                            .name(menuItem.getName())
+                            .price(String.valueOf(menuItem.getPrice()))
+                            .quantity(menuItem.getQuantity())
+                            .unit(menuItem.getUnit() != null ? menuItem.getUnit() : menuItem.getTotalquantityUnit())
+                            .isPresent(true)
+                            .build());
+                    foundInMenu = true;
+                }
+            }
+
+            // CASE B: Not found in menu catalog by ID or Name — return fallback placeholder state
             if (!foundInMenu) {
                 targetDetailsList.add(InventoryItemsResponse.builder()
                         .name(item.getItemName() != null ? item.getItemName() : "Unknown Item")

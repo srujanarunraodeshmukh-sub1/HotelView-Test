@@ -42,5 +42,6 @@ public class ReceiptResponse {
         private String quantity;
         private Double price;
         private Double subTotal;
+        private String unit;
     }
 }

@@ -56,4 +56,6 @@ public interface MenuItemRepository extends MongoRepository<MenuItem, String> {
 
 
     List<MenuItem> findByHotelIdAndUpdatedAtGreaterThan(String hotelId, LocalDateTime lastSync);
+
+    Optional<Object> findByHotelIdAndNameIgnoreCase(String hotelId, String trim);
 }

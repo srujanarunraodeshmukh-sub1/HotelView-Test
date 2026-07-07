@@ -34,5 +34,6 @@ public class CheckoutResponse {
         private String itemName;
         private String quantity;
         private Double price; // unit price * quantity
+        private String unit;
     }
 }

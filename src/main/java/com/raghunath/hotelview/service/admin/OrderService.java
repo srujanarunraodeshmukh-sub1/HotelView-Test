@@ -80,10 +80,12 @@ public class OrderService {
     /**
      * 3. CONFIRM ORDER: Moves items to the Kitchen.
      */
+    /**
+     * 3. CONFIRM ORDER: Moves items to the Kitchen.
+     */
     @CacheEvict(value = "dashboardStatsCache", key = "#hotelId")
     @Transactional
     public String confirmOrder(String hotelId, String tableName, List<OrderItem> items, String waiterId, String comment) {
-        // 1. Subscription Check
         Admin admin = adminRepository.findByHotelId(hotelId)
                 .orElseThrow(() -> new RuntimeException("Admin not found"));
 
@@ -91,10 +93,30 @@ public class OrderService {
             throw new RuntimeException("Kindly upgrade to the Standard or Premium plan.");
         }
 
-        // 2. Original Logic
         validateTableExists(hotelId, tableName);
         ZonedDateTime nowIST = getISTNow();
         Double total = items.stream().mapToDouble(OrderItem::getSubTotal).sum();
+
+        if (items != null) {
+            items.forEach(item -> {
+                // Clean itemName trailing slashes manually inline
+                if (item.getItemName() != null) {
+                    item.setItemName(item.getItemName().contains("//") ? item.getItemName().split("//")[0].trim() : item.getItemName().trim());
+                }
+
+                // Clean quantity trailing slashes manually inline
+                if (item.getQuantity() != null) {
+                    item.setQuantity(item.getQuantity().contains("//") ? item.getQuantity().split("//")[0].trim() : item.getQuantity().trim());
+                }
+
+                // Clean and set unit passed by the frontend directly inline
+                if (item.getUnit() == null || item.getUnit().trim().isEmpty()) {
+                    item.setUnit("PIECE");
+                } else {
+                    item.setUnit(item.getUnit().contains("//") ? item.getUnit().split("//")[0].trim() : item.getUnit().trim());
+                }
+            });
+        }
 
         KitchenOrder kOrder = KitchenOrder.builder()
                 .hotelId(hotelId)
@@ -195,6 +217,12 @@ public class OrderService {
     /**
      * 4. CONFIRM HOME DELIVERY ORDER: Moves items to the Kitchen.
      */
+    /**
+     * 4. CONFIRM HOME DELIVERY ORDER: Moves items to the Kitchen.
+     */
+    /**
+     * 4. CONFIRM HOME DELIVERY ORDER: Moves items to the Kitchen.
+     */
     @CacheEvict(value = "dashboardStatsCache", key = "#hotelId")
     @Transactional
     public String confirmHomeDelivery(String hotelId, List<OrderItem> items, String waiterId, String orderType) {
@@ -205,6 +233,29 @@ public class OrderService {
         if (getISTNow().toLocalDateTime().isAfter(admin.getSubscriptionExpiry())) {
             throw new RuntimeException("Kindly upgrade to the Standard or Premium plan.");
         }
+
+        if (items != null) {
+            items.forEach(item -> {
+                // Clean itemName trailing slashes manually inline
+                if (item.getItemName() != null) {
+                    item.setItemName(item.getItemName().contains("//") ? item.getItemName().split("//")[0].trim() : item.getItemName().trim());
+                }
+
+                // Clean quantity trailing slashes manually inline
+                if (item.getQuantity() != null) {
+                    item.setQuantity(item.getQuantity().contains("//") ? item.getQuantity().split("//")[0].trim() : item.getQuantity().trim());
+                }
+
+                // 🌟 Directly capture and sanitize the unit passed by the frontend inline
+                if (item.getUnit() == null || item.getUnit().trim().isEmpty()) {
+                    item.setUnit("PIECE");
+                } else {
+                    item.setUnit(item.getUnit().contains("//") ? item.getUnit().split("//")[0].trim() : item.getUnit().trim());
+                }
+            });
+        }
+
+        // 🌟 FIXED: Removed reduceInventoryStock from here so it only deducts once at checkout!
 
         // 2. Original Logic
         ZonedDateTime nowIST = getISTNow();
@@ -263,15 +314,32 @@ public class OrderService {
         }
         String tableName = activeOrders.get(0).getTableName();
 
+        for (KitchenOrder order : activeOrders) {
+            reduceInventoryStock(hotelId, order.getItems());
+        }
+
         // 3. Aggregate Items
         Map<String, CheckoutResponse.BillItem> itemMap = new HashMap<>();
         for (KitchenOrder order : activeOrders) {
             order.getItems().forEach(item -> {
+                Optional<?> menuItemOpt =
+                        menuItemRepository.findByHotelIdAndNameIgnoreCase(hotelId, item.getItemName().trim());
+
+                String itemUnit = "N/A";
+                if (menuItemOpt.isPresent()) {
+                    Object rawItem = menuItemOpt.get();
+                    // Safely cast the generic Object back to your MenuItem entity properties
+                    if (rawItem instanceof com.raghunath.hotelview.entity.MenuItem dbItem) {
+                        itemUnit = dbItem.getUnit() != null ? dbItem.getUnit() : dbItem.getTotalquantityUnit();
+                    }
+                }
+
                 itemMap.merge(item.getItemName(),
                         CheckoutResponse.BillItem.builder()
                                 .itemName(item.getItemName())
                                 .quantity(item.getQuantity())
                                 .price(item.getSubTotal())
+                                .unit(itemUnit)
                                 .build(),
                         (oldVal, newVal) -> {
                             oldVal.setQuantity(newVal.getQuantity());
@@ -375,60 +443,25 @@ public class OrderService {
 
         ZonedDateTime nowIST = getISTNow();
 
-        // 🌟 2. DYNAMIC INVENTORY STOCK DEDUCTION
-        for (OrderItem item : items) {
-            Optional<MenuItem> menuItemOpt = menuItemRepository.findByHotelIdAndName(hotelId, item.getItemName());
+        if (items != null) {
+            items.forEach(item -> {
+                // 1. Capture the wildcard template result due to repository method type signature
+                Optional<?> menuItemOpt = menuItemRepository.findByHotelIdAndNameIgnoreCase(hotelId, item.getItemName().trim());
 
-            if (menuItemOpt.isPresent()) {
-                MenuItem menuItem = menuItemOpt.get();
-
-                if (menuItem.getTotalQuantity() != null && menuItem.getUnit() != null) {
-                    String incomingQtyStr = item.getQuantity() != null ? item.getQuantity().trim().toLowerCase() : "1";
-
-                    double extractedValue = 1.0;
-                    double finalDeduction = 0.0;
-
-                    // Safely isolate numeric parts (extracts decimals/numbers like 270 or 1.5)
-                    try {
-                        String numericPart = incomingQtyStr.replaceAll("[^0-9.]", "");
-                        if (StringUtils.hasText(numericPart)) {
-                            extractedValue = Double.parseDouble(numericPart);
-                        }
-                    } catch (Exception e) {
-                        log.error("INVENTORY_PARSE_ERR: Failed parsing quantity string '{}'", incomingQtyStr);
+                String menuUnit = "PIECE";
+                if (menuItemOpt.isPresent()) {
+                    Object rawItem = menuItemOpt.get();
+                    // 2. Safely pattern-match and type-cast the database object to your MenuItem model properties
+                    if (rawItem instanceof com.raghunath.hotelview.entity.MenuItem dbItem) {
+                        menuUnit = dbItem.getUnit() != null ? dbItem.getUnit() : dbItem.getTotalquantityUnit();
                     }
-
-                    String adminUnit = menuItem.getUnit().toUpperCase();
-
-                    // Unit Conversion System Matrix Logic
-                    if (incomingQtyStr.contains("ml") && "LITER".equals(adminUnit)) {
-                        finalDeduction = extractedValue / 1000.0;
-                    } else if (incomingQtyStr.contains("gm") && "KG".equals(adminUnit)) {
-                        finalDeduction = extractedValue / 1000.0;
-                    } else if (incomingQtyStr.contains("cm") && "METER".equals(adminUnit)) {
-                        finalDeduction = extractedValue / 100.0;
-                    } else if (incomingQtyStr.contains("mm") && "METER".equals(adminUnit)) {
-                        finalDeduction = extractedValue / 1000.0;
-                    } else if (incomingQtyStr.contains("inch") && "FEET".equals(adminUnit)) {
-                        finalDeduction = extractedValue / 12.0;
-                    } else {
-                        // Fallback for direct unit matches (e.g., 2 kg for KG stock, or standard counts like 5 pieces)
-                        finalDeduction = extractedValue;
-                    }
-
-                    // Apply reduction and enforce zero floor boundary
-                    double updatedStock = Math.max(0.0, menuItem.getTotalQuantity() - finalDeduction);
-                    menuItem.setTotalQuantity(updatedStock);
-
-                    // Auto-disable visibility if stock completely empties out
-                    if (updatedStock <= 0.0) {
-                        menuItem.setIsAvailable(false);
-                    }
-
-                    menuItemRepository.save(menuItem);
                 }
-            }
+                item.setUnit(menuUnit);
+            });
         }
+
+        // 🌟 2. DYNAMIC INVENTORY STOCK DEDUCTION
+        reduceInventoryStock(hotelId, items);
 
         // 3. IN-MEMORY TRANSIENT OBJECT
         KitchenOrder transientOrder = KitchenOrder.builder()
@@ -441,6 +474,7 @@ public class OrderService {
                         .itemName(item.getItemName())
                         .quantity(item.getQuantity())
                         .price(item.getSubTotal())
+                        .unit(item.getUnit())
                         .build())
                 .toList();
 
@@ -720,6 +754,76 @@ public class OrderService {
                 .build();
     }
 
+    private void reduceInventoryStock(String hotelId, List<OrderItem> items) {
+        if (items == null || items.isEmpty()) return;
+
+        for (OrderItem item : items) {
+            if (item.getItemName() == null) continue;
+
+            String sanitizedName = item.getItemName().trim();
+
+            // 1. Fetch item case-insensitively to compute conversion metrics safely
+            // ✔️ Uses a generic wildcard to accept the Object type returned by the repository signature
+            Optional<?> menuItemOpt =
+                    menuItemRepository.findByHotelIdAndNameIgnoreCase(hotelId, sanitizedName);
+
+            if (menuItemOpt.isPresent() && menuItemOpt.get() instanceof com.raghunath.hotelview.entity.MenuItem menuItem) {
+                // menuItem is now cleanly cast and fully ready to use down below!
+
+                // Evaluate fallback variations across your document schema fields
+                String resolvedUnit = "PIECE";
+                if (menuItem.getUnit() != null) {
+                    resolvedUnit = menuItem.getUnit();
+                } else if (menuItem.getTotalquantityUnit() != null) {
+                    resolvedUnit = menuItem.getTotalquantityUnit();
+                }
+
+                String incomingQtyStr = item.getQuantity() != null ? item.getQuantity().trim().toLowerCase() : "1";
+                double extractedValue = 1.0;
+                double finalDeduction = 0.0;
+
+                try {
+                    String numericPart = incomingQtyStr.replaceAll("[^0-9.]", "");
+                    if (org.springframework.util.StringUtils.hasText(numericPart)) {
+                        extractedValue = Double.parseDouble(numericPart);
+                    }
+                } catch (Exception e) {
+                    log.error("INVENTORY_PARSE_ERR: Failed parsing quantity string '{}'", incomingQtyStr);
+                }
+
+                String adminUnit = resolvedUnit.toUpperCase();
+
+                // 🌟 ENHANCED CONVERSION MATRIX: Direct matching bypasses divisor reductions entirely!
+                if (incomingQtyStr.contains("ml") && "ML".equals(adminUnit)) {
+                    finalDeduction = extractedValue; // Direct ML subtraction format
+                } else if (incomingQtyStr.contains("ml") && "LITER".equals(adminUnit)) {
+                    finalDeduction = extractedValue / 1000.0; // Scaled divisor conversion formatting
+                } else if (incomingQtyStr.contains("gm") && "GM".equals(adminUnit)) {
+                    finalDeduction = extractedValue;
+                } else if (incomingQtyStr.contains("gm") && "KG".equals(adminUnit)) {
+                    finalDeduction = extractedValue / 1000.0;
+                } else {
+                    finalDeduction = extractedValue; // Standard raw integer capture
+                }
+
+                // 2. Execute atomic increment directly using MongoTemplate
+                try {
+                    Query query = new Query(Criteria.where("hotelId").is(hotelId)
+                            .and("name").regex("^" + java.util.regex.Pattern.quote(sanitizedName) + "$", "i"));
+
+                    Update update = new Update().inc("totalQuantity", -finalDeduction);
+
+                    mongoTemplate.updateFirst(query, update, com.raghunath.hotelview.entity.MenuItem.class);
+                    log.info("INVENTORY_LOG: Atomic deduction forced for '{}': -{}", sanitizedName, finalDeduction);
+                } catch (Exception e) {
+                    log.error("INVENTORY_CRITICAL_ERR: Direct atomic inventory adjustment failed for '{}'", sanitizedName, e);
+                }
+            } else {
+                log.error("INVENTORY_LOG: Skipped tracking update. Name '{}' not matching items in hotel: {}", sanitizedName, hotelId);
+            }
+        }
+    }
+
     /**
      * 8. FETCH DASHBOARD STATS
      */
@@ -839,14 +943,20 @@ public class OrderService {
             String newQtyStr = (newItem != null && newItem.getQuantity() != null) ? newItem.getQuantity() : "0";
 
             if (!oldQtyStr.equalsIgnoreCase(newQtyStr)) {
+                String cleanOld = oldQtyStr.replaceAll("[^0-9.]", "");
+                String cleanNew = newQtyStr.replaceAll("[^0-9.]", "");
+
+                int prev = cleanOld.isEmpty() ? 0 : (int) Double.parseDouble(cleanOld);
+                int next = cleanNew.isEmpty() ? 0 : (int) Double.parseDouble(cleanNew);
+
                 editLogs.add(OrderEdit.builder()
                         .orderId(orderId)
                         .hotelId(hotelId)
                         .editedBy(editedBy)
                         .itemName(oldItem.getItemName())
-                        .previousQty(Integer.parseInt(oldQtyStr.replaceAll("[^0-9]", "")))
-                        .newQty(Integer.parseInt(newQtyStr.replaceAll("[^0-9]", "")))
-                        .delta(0)
+                        .previousQty(prev)
+                        .newQty(next)
+                        .delta(next - prev) // 🌟 Automatically maps the quantity shift balance correctly
                         .timestamp(timeIST)
                         .build());
             }
@@ -858,6 +968,8 @@ public class OrderService {
 
             if (!exists) {
                 String newQtyStr = (newItem.getQuantity() != null) ? newItem.getQuantity() : "0";
+                String cleanNew = newQtyStr.replaceAll("[^0-9.]", "");
+                int next = cleanNew.isEmpty() ? 0 : (int) Double.parseDouble(cleanNew);
 
                 editLogs.add(OrderEdit.builder()
                         .orderId(orderId)
@@ -865,8 +977,8 @@ public class OrderService {
                         .editedBy(editedBy)
                         .itemName(newItem.getItemName())
                         .previousQty(0)
-                        .newQty(Integer.parseInt(newQtyStr.replaceAll("[^0-9]", "")))
-                        .delta(0)
+                        .newQty(next)
+                        .delta(next)
                         .timestamp(timeIST)
                         .build());
             }
