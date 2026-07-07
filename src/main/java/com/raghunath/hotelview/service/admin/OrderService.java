@@ -924,6 +924,10 @@ public class OrderService {
     /**
      * 9. EDIT ORDER
      */
+    /**
+     * CONFIRM ORDER EDIT: Applies active item edits to a live KitchenOrder,
+     * tracks precise logs, updates the table bill delta shift, and maps unit configurations.
+     */
     @Transactional
     public void confirmOrderEdit(String hotelId, String orderId, List<OrderItem> newItems, String editedBy) {
         KitchenOrder order = kitchenOrderRepository.findById(orderId)
@@ -933,9 +937,32 @@ public class OrderService {
         String timeIST = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"))
                 .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 
+        // 🌟 PRE-STEP: Sanitize names, quantities, and map units inside the incoming list inline
+        if (newItems != null) {
+            newItems.forEach(item -> {
+                if (item.getItemName() != null) {
+                    item.setItemName(item.getItemName().contains("//") ? item.getItemName().split("//")[0].trim() : item.getItemName().trim());
+                }
+                if (item.getQuantity() != null) {
+                    item.setQuantity(item.getQuantity().contains("//") ? item.getQuantity().split("//")[0].trim() : item.getQuantity().trim());
+                }
+                // Directly capture and clean the unit field from frontend payload layout
+                if (item.getUnit() == null || item.getUnit().trim().isEmpty()) {
+                    item.setUnit("PIECE");
+                } else {
+                    item.setUnit(item.getUnit().contains("//") ? item.getUnit().split("//")[0].trim() : item.getUnit().trim());
+                }
+            });
+        }
+
+        // Loop 1: Check updates or removals against existing items
         for (OrderItem oldItem : order.getItems()) {
+            String cleanOldName = oldItem.getItemName() != null ? oldItem.getItemName().trim() : "";
+            cleanOldName = cleanOldName.contains("//") ? cleanOldName.split("//")[0].trim() : cleanOldName;
+
+            String finalCleanOldName = cleanOldName;
             OrderItem newItem = newItems.stream()
-                    .filter(ni -> ni.getItemName().equalsIgnoreCase(oldItem.getItemName()))
+                    .filter(ni -> ni.getItemName().equalsIgnoreCase(finalCleanOldName))
                     .findFirst()
                     .orElse(null);
 
@@ -956,12 +983,13 @@ public class OrderService {
                         .itemName(oldItem.getItemName())
                         .previousQty(prev)
                         .newQty(next)
-                        .delta(next - prev) // 🌟 Automatically maps the quantity shift balance correctly
+                        .delta(next - prev)
                         .timestamp(timeIST)
                         .build());
             }
         }
 
+        // Loop 2: Log entirely brand new additions
         for (OrderItem newItem : newItems) {
             boolean exists = order.getItems().stream()
                     .anyMatch(old -> old.getItemName().equalsIgnoreCase(newItem.getItemName()));
@@ -985,7 +1013,7 @@ public class OrderService {
         }
 
         double oldTotal = order.getTotalAmount();
-        double newTotal = newItems.stream().mapToDouble(OrderItem::getSubTotal).sum();
+        double newTotal = newItems != null ? newItems.stream().mapToDouble(OrderItem::getSubTotal).sum() : 0.0;
 
         order.setItems(newItems);
         order.setTotalAmount(newTotal);

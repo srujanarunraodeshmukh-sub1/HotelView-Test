@@ -330,6 +330,11 @@ public class CompletedOrderService {
      * Overwrites quantities directly across all multi-block sub-orders, applies frontend financial values directly,
      * recalculates inner kitchen order totals dynamically, and syncs stock adjustments safely.
      */
+    /**
+     * 11. EDIT COMPLETED ORDER (Strict Overrides, 7-Day Limit, Inventory Stock Sync & Dynamic Financial Mapping)
+     * Overwrites quantities directly across all multi-block sub-orders, applies frontend financial values directly,
+     * recalculates inner kitchen order totals dynamically, and syncs stock adjustments safely.
+     */
     @Caching(evict = {
             @CacheEvict(value = "dashboardStatsCache", key = "#hotelId"),
             @CacheEvict(value = "orderCache", key = "#hotelId + '-today'"),
