@@ -344,7 +344,19 @@ public class OrderService {
                                 .unit(itemUnit)
                                 .build(),
                         (oldVal, newVal) -> {
-                            oldVal.setQuantity(newVal.getQuantity());
+                            // ← FIX: parse both quantities and add them
+                            int oldQty = 0;
+                            int newQty = 0;
+                            try {
+                                oldQty = (int) Double.parseDouble(
+                                        oldVal.getQuantity().replaceAll("[^0-9.]", "").trim());
+                                newQty = (int) Double.parseDouble(
+                                        newVal.getQuantity().replaceAll("[^0-9.]", "").trim());
+                            } catch (Exception e) {
+                                log.error("QTY_MERGE_ERROR: Failed parsing quantities for item '{}'",
+                                        item.getItemName());
+                            }
+                            oldVal.setQuantity(String.valueOf(oldQty + newQty)); // ← ADD instead of replace
                             oldVal.setPrice(oldVal.getPrice() + newVal.getPrice());
                             return oldVal;
                         });
