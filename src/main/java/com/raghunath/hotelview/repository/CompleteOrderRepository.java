@@ -39,6 +39,10 @@ public interface CompleteOrderRepository extends MongoRepository<CompletedOrder,
             fields = "{ 'id':1, 'customerName':1, 'customerMobile':1, 'checkoutDate':1, 'checkoutTime':1, 'totalPayable':1, 'orderType':1 }")
     Page<CompletedOrder> findByHotelId(String hotelId, Pageable pageable);
 
+    @Query(value = "{ 'hotelId' : ?0, 'checkoutBy' : ?1 }",
+            fields = "{ 'id':1, 'customerName':1, 'customerMobile':1, 'checkoutDate':1, 'checkoutTime':1, 'totalPayable':1, 'orderType':1 }")
+    Page<CompletedOrder> findByHotelIdAndCheckoutBy(String hotelId, String checkoutBy, Pageable pageable);
+
     // --- Search API (Search by Name OR Mobile) ---
     @Query(value = "{ 'hotelId': ?0, $or: [ { 'customerName': { $regex: ?1, $options: 'i' } }, { 'customerMobile': { $regex: ?1 } } ] }")
     List<CompletedOrder> searchOrders(String hotelId, String searchString);

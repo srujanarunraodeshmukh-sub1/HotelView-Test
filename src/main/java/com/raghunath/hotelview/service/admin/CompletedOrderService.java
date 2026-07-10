@@ -78,6 +78,37 @@ public class CompletedOrderService {
         });
     }
 
+    public Page<DeliverySummaryDTO> getCompletedOrdersByStaffPaged(String hotelId, String checkoutBy, int pageNumber) {
+        // Sort by checkoutDate and checkoutTime descending chronologically
+        Pageable pageable = PageRequest.of(pageNumber, 10,
+                Sort.by("checkoutDate").descending().and(Sort.by("checkoutTime").descending()));
+
+        // 1. Fetch the lightweight projected document page from MongoDB filtered by checkoutBy
+        Page<CompletedOrder> entities = completeOrderRepository.findByHotelIdAndCheckoutBy(hotelId, checkoutBy, pageable);
+
+        // 2. Map Entities to DeliverySummaryDTO cleanly
+        return entities.map(order -> {
+            LocalDateTime dateTimeFallback = LocalDateTime.now();
+
+            if (order.getCheckoutDate() != null && order.getCheckoutTime() != null) {
+                try {
+                    dateTimeFallback = LocalDateTime.parse(order.getCheckoutDate() + "T" + order.getCheckoutTime());
+                } catch (Exception ignored) {
+                    // Fallback safely if string parsing glitches
+                }
+            }
+
+            return DeliverySummaryDTO.builder()
+                    .id(order.getId())
+                    .orderType(order.getOrderType())
+                    .customerName(order.getCustomerName())
+                    .customerMobile(order.getCustomerMobile())
+                    .totalPayable(order.getTotalPayable())
+                    .checkoutAt(dateTimeFallback)
+                    .build();
+        });
+    }
+
     public ReceiptResponse getReceiptDetails(String orderId, String hotelIdFromToken) {
         // 1. Fetch the Completed Order
         CompletedOrder order = completeOrderRepository.findById(orderId)

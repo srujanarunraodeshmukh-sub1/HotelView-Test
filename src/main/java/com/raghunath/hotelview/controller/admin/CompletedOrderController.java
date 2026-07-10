@@ -32,6 +32,18 @@ public class CompletedOrderController {
         return ResponseEntity.ok(completedOrderService.getCompletedOrdersPaged(hotelId, page));
     }
 
+    @GetMapping("/list/staff/{checkoutBy}")
+    public ResponseEntity<Page<DeliverySummaryDTO>> getCompletedListByStaff(
+            @PathVariable String checkoutBy,
+            @RequestParam(defaultValue = "0") int page) {
+
+        // Extracts context authentication name exactly like your original method
+        String hotelId = SecurityContextHolder.getContext().getAuthentication().getName();
+
+        Page<DeliverySummaryDTO> staffOrders = completedOrderService.getCompletedOrdersByStaffPaged(hotelId, checkoutBy, page);
+        return ResponseEntity.ok(staffOrders);
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<ReceiptResponse> getOrderDetails(@PathVariable String id) {
         String hotelId = SecurityContextHolder.getContext().getAuthentication().getName();
