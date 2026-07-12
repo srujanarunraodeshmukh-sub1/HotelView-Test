@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -100,37 +101,67 @@ public class CompletedOrderService {
                     .build();
         }).collect(Collectors.toList());
 
-        // 🌟 3. GROUP BY DATE: Use LinkedHashMap to perfectly preserve MongoDB's chronological sort order
+        // 3. GROUP BY DATE: Organize the current page slice structure chronologically
         Map<String, List<DeliverySummaryDTO>> groupedMap = flatSummaries.stream().collect(
                 Collectors.groupingBy(
-                        dto -> {
-                            if (dto.getCheckoutAt() != null) {
-                                return dto.getCheckoutAt().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
-                            }
-                            return "Unknown Date";
-                        },
+                        dto -> dto.getCheckoutAt() != null
+                                ? dto.getCheckoutAt().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                                : "Unknown Date",
                         LinkedHashMap::new, // Maintains descending order sequence safely
                         Collectors.toList()
                 )
         );
 
-        // 🌟 4. CONSTRUCT THE DATE BUCKETS WITH TOTALS
+        // 4. CONSTRUCT THE DATE BUCKETS WITH GLOBAL DATABASE TOTALS
         List<DailyOrderGroupDTO> contentGroups = new ArrayList<>();
         groupedMap.forEach((dateStr, dailyOrders) -> {
-            // Calculate the exact cumulative cash values for this specific date group
-            double dailyTotalSum = dailyOrders.stream()
-                    .mapToDouble(o -> o.getTotalPayable() != null ? o.getTotalPayable() : 0.0)
-                    .sum();
+
+            double databaseGrandTotal = 0.0;
+            int databaseTotalOrdersCount = 0;
+
+            // 🌟 Fix: Query the entire database collection for the true global totals of this date
+            try {
+                // Convert dd/MM/yyyy back to yyyy-MM-dd to match how checkoutDate is stored in MongoDB
+                String dbDateStr = LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                        .format(DateTimeFormatter.ISO_LOCAL_DATE);
+
+                org.springframework.data.mongodb.core.aggregation.Aggregation aggregation =
+                        org.springframework.data.mongodb.core.aggregation.Aggregation.newAggregation(
+                                org.springframework.data.mongodb.core.aggregation.Aggregation.match(
+                                        org.springframework.data.mongodb.core.query.Criteria.where("hotelId").is(hotelId)
+                                                .and("checkoutBy").is(checkoutBy)
+                                                .and("checkoutDate").is(dbDateStr)
+                                ),
+                                org.springframework.data.mongodb.core.aggregation.Aggregation.group("checkoutDate")
+                                        .sum("totalPayable").as("totalAmount")
+                                        .count().as("totalOrder")
+                        );
+
+                // ⚠️ Note: Make sure "completed_orders" matches your collection name exactly
+                org.springframework.data.mongodb.core.aggregation.AggregationResults<org.bson.Document> results =
+                        mongoTemplate.aggregate(aggregation, "completed_orders", org.bson.Document.class);
+
+                org.bson.Document rawDoc = results.getUniqueMappedResult();
+                if (rawDoc != null) {
+                    databaseGrandTotal = rawDoc.get("totalAmount") != null ? ((Number) rawDoc.get("totalAmount")).doubleValue() : 0.0;
+                    databaseTotalOrdersCount = rawDoc.get("totalOrder") != null ? ((Number) rawDoc.get("totalOrder")).intValue() : 0;
+                }
+            } catch (Exception e) {
+                log.error("AGGREGATION_ERROR: Failed computing full db metrics for date {}", dateStr, e);
+                // Fallback to current page slice metrics if aggregation drops out
+                databaseGrandTotal = dailyOrders.stream().mapToDouble(o -> o.getTotalPayable() != null ? o.getTotalPayable() : 0.0).sum();
+                databaseTotalOrdersCount = dailyOrders.size();
+            }
 
             contentGroups.add(DailyOrderGroupDTO.builder()
                     .date(dateStr)
-                    .totalAmount(dailyTotalSum)
-                    .totalOrder(dailyOrders.size())
+                    .totalAmount(databaseGrandTotal)      // ✔️ Global daily total payable sum
+                    .totalOrder(databaseTotalOrdersCount)  // ✔️ Global daily count count
                     .orders(dailyOrders)
                     .build());
         });
 
-        // 5. Wrap the structural response back into a PageImpl container to keep page controls working
+        // 5. Wrap the structural response back into a PageImpl container
         return new PageImpl<>(contentGroups, pageable, entities.getTotalElements());
     }
 
