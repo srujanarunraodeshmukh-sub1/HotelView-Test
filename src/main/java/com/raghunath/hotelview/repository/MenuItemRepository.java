@@ -40,7 +40,7 @@ public interface MenuItemRepository extends MongoRepository<MenuItem, String> {
 
 
     @Query(value = "{ 'hotelId': ?0, 'isApproved': true }",
-            fields = "{ 'category': 1, 'name': 1, 'shortCode': 1, 'description': 1, 'price': 1, 'isVeg': 1, 'isAvailable': 1, 'imageUrl': 1, 'quantity': 1, 'totalQuantity': 1, 'totalquantityUnit': 1, 'unit': 1 }")
+            fields = "{ 'category': 1, 'name': 1, 'shortCode': 1, 'description': 1, 'price': 1, 'isVeg': 1, 'isAvailable': 1, 'imageUrl': 1, 'quantity': 1, 'totalQuantity': 1, 'lastAddedStock': 1, 'totalquantityUnit': 1, 'unit': 1 }")
     List<MenuItem> findAllByHotelIdForCache(String hotelId);
 
 

@@ -51,6 +51,7 @@ public class MenuItemService {
                 .preparationTime(request.getPreparationTime())
                 .quantity(request.getQuantity())
                 .totalQuantity(request.getTotalQuantity()) // 🌟 Map Total Quantity
+                .lastAddedStock(request.getTotalQuantity())
                 .totalquantityUnit(request.getTotalquantityUnit())
                 .unit(request.getUnit() != null ? request.getUnit().toUpperCase() : "PIECE") // 🌟 Map Unit Matrix
                 .createdAt(now)
@@ -104,6 +105,7 @@ public class MenuItemService {
 
         // 🌟 Robust Inventory & Casing Mapping Updates
         existingItem.setTotalQuantity(dto.getTotalQuantity());
+        existingItem.setLastAddedStock(dto.getTotalQuantity());
         existingItem.setTotalquantityUnit(dto.getTotalquantityUnit());
         existingItem.setUnit(dto.getUnit() != null ? dto.getUnit().toUpperCase() : existingItem.getUnit());
 
@@ -207,6 +209,7 @@ public class MenuItemService {
                 .quantity(item.getQuantity())
                 .totalQuantity(item.getTotalQuantity())
                 .totalquantityUnit(item.getTotalquantityUnit())
+                .lastAddedStock(item.getLastAddedStock())
                 .unit(item.getUnit())
                 .build();
     }

@@ -45,6 +45,9 @@ public class MenuItem {
 
     private Double totalQuantity; // Tracks numeric pool (e.g., 50.0)
 
+    // Add this field inside your MenuItem entity class
+    private Double lastAddedStock;
+
     private String totalquantityUnit;
 
     private String unit;          // Stores category indicator (e.g., "LITER", "KG", "METER", "FEET", "PIECE")
