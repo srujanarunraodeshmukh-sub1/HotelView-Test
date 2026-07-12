@@ -99,6 +99,11 @@ public class OrderService {
 
         if (items != null) {
             items.forEach(item -> {
+                // 🌟 FIXED HERE: Explicitly capture and sanitize the itemId passed by the frontend request payload
+                if (item.getItemId() != null) {
+                    item.setItemId(item.getItemId().contains("//") ? item.getItemId().split("//")[0].trim() : item.getItemId().trim());
+                }
+
                 // Clean itemName trailing slashes manually inline
                 if (item.getItemName() != null) {
                     item.setItemName(item.getItemName().contains("//") ? item.getItemName().split("//")[0].trim() : item.getItemName().trim());
@@ -315,6 +320,7 @@ public class OrderService {
             throw new RuntimeException("No active orders found");
         }
         String tableName = activeOrders.get(0).getTableName();
+        String parentOrderType = activeOrders.get(0).getOrderType() != null ? activeOrders.get(0).getOrderType() : "TABLE";
 
         // 🌟 Runs safely now since we optimized reduceInventoryStock to prefer item.getItemId()!
         for (KitchenOrder order : activeOrders) {
@@ -335,11 +341,15 @@ public class OrderService {
                 // 🌟 FIX: Pull the saved unit directly out of the order item snapshot instead of querying by name
                 String itemUnit = item.getUnit() != null ? item.getUnit().trim() : "PIECE";
 
+                double directSubTotal = item.getSubTotal() != null ? item.getSubTotal() : 0.0;
+                double baseUnitPrice = item.getPrice() != null ? item.getPrice() : 0.0;
+
                 CheckoutResponse.BillItem initialVal = CheckoutResponse.BillItem.builder()
                         .itemName(rawName)
                         .quantity(item.getQuantity() != null ? item.getQuantity().trim() : "1")
                         .price(item.getPrice() != null ? item.getPrice() : (item.getSubTotal() != null ? item.getSubTotal() : 0.0))
                         .unit(itemUnit)
+                        .subTotal(directSubTotal)
                         .build();
 
                 itemMap.merge(normalizedKey, initialVal, (oldVal, newVal) -> {
@@ -364,7 +374,10 @@ public class OrderService {
                         oldVal.setQuantity(combinedQty % 1 == 0 ? String.format("%.0f", combinedQty) : String.format("%.2f", combinedQty));
                     }
 
-                    oldVal.setPrice(oldVal.getPrice() + newVal.getPrice());
+                    double oldSub = oldVal.getSubTotal() != null ? oldVal.getSubTotal() : 0.0;
+                    double newSub = newVal.getSubTotal() != null ? newVal.getSubTotal() : 0.0;
+                    oldVal.setSubTotal(oldSub + newSub);
+
                     return oldVal;
                 });
             });
@@ -377,6 +390,19 @@ public class OrderService {
 
         ZonedDateTime nowIST = getISTNow();
 
+        List<KitchenOrderSnapshot> snapshots = activeOrders.stream().map(order ->
+                KitchenOrderSnapshot.builder()
+                        .id(order.getId())
+                        .items(order.getItems())
+                        .totalAmount(order.getTotalAmount())
+                        .status(order.getStatus())
+                        .comments(order.getComments())
+                        .placedBy(order.getPlacedBy())
+                        .createdDate(order.getCreatedDate())
+                        .createdTime(order.getCreatedTime())
+                        .build()
+        ).collect(java.util.stream.Collectors.toList());
+
         // 4. Build and Save Completed Order
         CompletedOrder finalBill = CompletedOrder.builder()
                 .hotelId(hotelId)
@@ -385,7 +411,7 @@ public class OrderService {
                 .customerName(StringUtils.hasText(request.getCustomerName()) ? request.getCustomerName() : "Walk-in Guest")
                 .customerMobile(StringUtils.hasText(request.getCustomerMobile()) ? request.getCustomerMobile() : "0000000000")
                 .customerAddress(StringUtils.hasText(request.getCustomerAddress()) ? request.getCustomerAddress() : "N/A")
-                .allOrders(activeOrders)
+                .allOrders(snapshots)
                 .grandTotal(grandTotal)
                 .paymentStatus("PAID")
                 .discountPercent(discountPercent)
@@ -510,9 +536,10 @@ public class OrderService {
         reduceInventoryStock(hotelId, items);
 
         // 3. IN-MEMORY TRANSIENT OBJECT
-        KitchenOrder transientOrder = KitchenOrder.builder()
+        KitchenOrderSnapshot transientOrderSnapshot = KitchenOrderSnapshot.builder()
                 .items(items)
                 .totalAmount(grandTotal)
+                // Implicitly left out: hotelId, tableName, orderType do not exist in the snapshot class!
                 .build();
 
         // 4. Prepare Bill Items
@@ -522,6 +549,7 @@ public class OrderService {
                         .quantity(item.getQuantity())
                         .price(item.getPrice() != null ? item.getPrice() : item.getSubTotal()) // Fallback protect raw base pricing calculations
                         .unit(item.getUnit())
+                        .subTotal(item.getSubTotal() != null ? item.getSubTotal() : 0.0) // 🌟 Mapped cleanly as Double
                         .build())
                 .toList();
 
@@ -532,7 +560,7 @@ public class OrderService {
                 .customerName(null)
                 .customerMobile(null)
                 .customerAddress(null)
-                .allOrders(Collections.singletonList(transientOrder))
+                .allOrders(Collections.singletonList(transientOrderSnapshot))
                 .grandTotal(grandTotal)
                 .paymentStatus("PAID")
                 .discountPercent(discountPercent)
@@ -605,19 +633,18 @@ public class OrderService {
         }).toList();
 
         // 3. Construct the Transient KitchenOrder Document Wrapper
-        KitchenOrder transientOrder = KitchenOrder.builder()
+        KitchenOrderSnapshot transientOrderSnapshot = KitchenOrderSnapshot.builder()
                 .id(new org.bson.types.ObjectId().toString())
-                .hotelId(hotelId)
-                .tableName(null) // Matching production null states
-                .orderType("INSTANT")
                 .items(sanitizedItems)
                 .totalAmount(grandTotal)
                 .status("COMPLETED")
                 .placedBy(actualLoggedInUser)
+                .acceptedBy(actualLoggedInUser)
                 .completedBy(actualLoggedInUser)
                 .updatedAt(nowIST.toLocalDateTime())
                 .createdDate(currentDateStr)
                 .createdTime(currentTimeStr)
+                // Perfect! hotelId, tableName, and orderType are excluded automatically
                 .build();
 
         // 4. Map Response Items (Matching your exact production output model layouts)
@@ -636,7 +663,7 @@ public class OrderService {
                 .customerName(null)
                 .customerMobile(null)
                 .customerAddress(null)
-                .allOrders(Collections.singletonList(transientOrder))
+                .allOrders(Collections.singletonList(transientOrderSnapshot))
                 .grandTotal(grandTotal)
                 .paymentStatus("PAID")
                 .discountPercent(discountPercent)
@@ -726,8 +753,19 @@ public class OrderService {
                 .createdTime(currentTimeStr)
                 .build();
 
-        List<KitchenOrder> allOrdersList = new ArrayList<>();
-        allOrdersList.add(mockOrder);
+        List<KitchenOrderSnapshot> allOrdersList = new ArrayList<>();
+        allOrdersList.add(KitchenOrderSnapshot.builder()
+                .id(mockOrder.getId())
+                .items(mockOrder.getItems())
+                .totalAmount(mockOrder.getTotalAmount())
+                .status(mockOrder.getStatus())
+                .placedBy(mockOrder.getPlacedBy())
+                .completedBy(mockOrder.getCompletedBy())
+                .updatedAt(mockOrder.getUpdatedAt())
+                .createdDate(mockOrder.getCreatedDate())
+                .createdTime(mockOrder.getCreatedTime())
+                // Omit hotelId, tableName, and orderType from the snapshot structure perfectly!
+                .build());
 
         // 5. Build and Save Completed Order
         CompletedOrder finalBill = CompletedOrder.builder()
@@ -793,6 +831,8 @@ public class OrderService {
                 .items(responseItems)
                 .grandTotal(grandTotal)
                 .totalPayable(totalPayable)
+                .discountPercent(discountPercent) // 🌟 FIXED: Added missing field
+                .discountAmount(discountAmount)
                 .restaurantName(admin.getRestaurantName())
                 .restaurantAddress(admin.getRestaurantAddress())
                 .restaurantContact(admin.getRestaurantContact())
@@ -818,43 +858,28 @@ public class OrderService {
                 }
             }
 
-            // 🌟 2. FALLBACK CHECK: If itemId didn't match or wasn't provided, use your existing case-insensitive name lookup
+            // 🌟 2. FALLBACK CHECK: Fixed to safely pull the first matching element instead of throwing a non-unique 500
             if (menuItem == null) {
-                Optional<?> menuItemOpt = menuItemRepository.findByHotelIdAndNameIgnoreCase(hotelId, sanitizedName);
+                // Using a regex find sequence allows us to safely handle duplicates without throwing an internal exception
+                List<com.raghunath.hotelview.entity.MenuItem> fallbackList = mongoTemplate.find(
+                        new Query(Criteria.where("hotelId").is(hotelId)
+                                .and("name").regex("^" + java.util.regex.Pattern.quote(sanitizedName) + "$", "i")),
+                        com.raghunath.hotelview.entity.MenuItem.class,
+                        "menu_items"
+                );
 
-                // If it returns multiple elements due to structural naming anomalies, safely select the first active match
-                if (menuItemOpt.isPresent()) {
-                    Object rawItem = menuItemOpt.get();
-                    if (rawItem instanceof com.raghunath.hotelview.entity.MenuItem castedItem) {
-                        menuItem = castedItem;
-                    }
-                } else {
-                    // Secondary fallback protection: Run a collection-wide regex match to handle deep catalog variants safely
-                    List<com.raghunath.hotelview.entity.MenuItem> fallbackList = mongoTemplate.find(
-                            new Query(Criteria.where("hotelId").is(hotelId)
-                                    .and("name").regex("^" + java.util.regex.Pattern.quote(sanitizedName) + "$", "i")),
-                            com.raghunath.hotelview.entity.MenuItem.class,
-                            "menu_items"
-                    );
-                    if (!fallbackList.isEmpty()) {
-                        menuItem = fallbackList.stream()
-                                .filter(mi -> mi != null && Boolean.TRUE.equals(mi.getIsAvailable()))
-                                .findFirst()
-                                .orElse(fallbackList.get(0));
-                    }
+                if (!fallbackList.isEmpty()) {
+                    // Prioritize an active/available version if duplicates exist; otherwise grab the first index entry
+                    menuItem = fallbackList.stream()
+                            .filter(mi -> mi != null && Boolean.TRUE.equals(mi.getIsAvailable()))
+                            .findFirst()
+                            .orElse(fallbackList.get(0));
                 }
             }
 
             // 🌟 3. ORIGINAL CALCULATIONS AND ATOMIC INCREMENT ACTIONS BLOCK
             if (menuItem != null) {
-                // Evaluate fallback variations across your document schema fields
-                String resolvedUnit = "PIECE";
-                if (menuItem.getUnit() != null) {
-                    resolvedUnit = menuItem.getUnit();
-                } else if (menuItem.getTotalquantityUnit() != null) {
-                    resolvedUnit = menuItem.getTotalquantityUnit();
-                }
-
+                // RESOLVE QUANTITY METRIC FIRST: If quantity is explicitly 0, skip deduction entirely
                 String incomingQtyStr = item.getQuantity() != null ? item.getQuantity().trim().toLowerCase() : "1";
                 double extractedValue = 1.0;
                 double finalDeduction = 0.0;
@@ -866,6 +891,19 @@ public class OrderService {
                     }
                 } catch (Exception e) {
                     log.error("INVENTORY_PARSE_ERR: Failed parsing quantity string '{}'", incomingQtyStr);
+                }
+
+                // Quick bypass optimization check for empty orders or tracking entries holding zero values
+                if (extractedValue <= 0.0) {
+                    continue;
+                }
+
+                // Evaluate fallback variations across your document schema fields
+                String resolvedUnit = "PIECE";
+                if (menuItem.getUnit() != null) {
+                    resolvedUnit = menuItem.getUnit();
+                } else if (menuItem.getTotalquantityUnit() != null) {
+                    resolvedUnit = menuItem.getTotalquantityUnit();
                 }
 
                 String adminUnit = resolvedUnit.toUpperCase();
@@ -1116,7 +1154,7 @@ public class OrderService {
 
         Map<String, Object> finalTableHistory = new LinkedHashMap<>();
 
-        for (KitchenOrder subOrder : completedBill.getAllOrders()) {
+        for (KitchenOrderSnapshot subOrder : completedBill.getAllOrders()) {
             String subOrderId = subOrder.getId();
 
             Query query = new Query(Criteria.where("orderId").is(subOrderId).and("hotelId").is(hotelId));
@@ -1125,7 +1163,7 @@ public class OrderService {
             List<OrderEdit> editHistory = mongoTemplate.find(query, OrderEdit.class, "order_edits");
 
             Map<String, Object> orderEntry = new LinkedHashMap<>();
-            orderEntry.put("orderType", subOrder.getOrderType());
+            orderEntry.put("orderType", completedBill.getOrderType());
             orderEntry.put("finalItems", subOrder.getItems());
             orderEntry.put("totalAmount", subOrder.getTotalAmount());
 

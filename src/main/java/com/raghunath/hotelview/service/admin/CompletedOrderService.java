@@ -1,10 +1,7 @@
 package com.raghunath.hotelview.service.admin;
 
 import com.raghunath.hotelview.dto.admin.*;
-import com.raghunath.hotelview.entity.Admin;
-import com.raghunath.hotelview.entity.CompletedOrder;
-import com.raghunath.hotelview.entity.CustomerDetails;
-import com.raghunath.hotelview.entity.KitchenOrder;
+import com.raghunath.hotelview.entity.*;
 import com.raghunath.hotelview.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -125,7 +122,7 @@ public class CompletedOrderService {
         // 3. Extract items and units straight out of the document in memory
         List<ReceiptResponse.FlattenedItem> flattenedItems = new ArrayList<>();
         if (order.getAllOrders() != null) {
-            for (KitchenOrder kitchenOrder : order.getAllOrders()) {
+            for (KitchenOrderSnapshot kitchenOrder : order.getAllOrders()) {
                 if (kitchenOrder == null || kitchenOrder.getItems() == null) continue;
 
                 for (OrderItem item : kitchenOrder.getItems()) {
@@ -273,7 +270,7 @@ public class CompletedOrderService {
         for (CompletedOrder o : completedOrders) {
             double amt = (o.getTotalPayable() != null) ? o.getTotalPayable() : 0.0;
             if (o.getAllOrders() != null && !o.getAllOrders().isEmpty()) {
-                String tName = o.getAllOrders().get(0).getTableName();
+                String tName = o.getTableName();
                 if (tName != null) {
                     tableDeductions.put(tName, tableDeductions.getOrDefault(tName, 0.0) + amt);
                 }
@@ -521,7 +518,7 @@ public class CompletedOrderService {
         }
 
         // 🌟 4. RECALCULATE KITCHEN ORDER TOTAL AMOUNT METRICS FOR EACH INNER BLOCK (Subtotal to totalAmount logic)
-        for (KitchenOrder subOrder : order.getAllOrders()) {
+        for (KitchenOrderSnapshot subOrder : order.getAllOrders()) {
             if (subOrder != null && subOrder.getItems() != null) {
                 double computedBlockTotal = subOrder.getItems().stream()
                         .filter(java.util.Objects::nonNull)

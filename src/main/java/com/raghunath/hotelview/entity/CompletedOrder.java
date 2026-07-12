@@ -1,5 +1,6 @@
 package com.raghunath.hotelview.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.*;
 import org.springframework.data.annotation.Id;
@@ -21,7 +22,7 @@ public class CompletedOrder {
     private String customerMobile;
     private String customerAddress;
 
-    private List<KitchenOrder> allOrders;
+    private List<KitchenOrderSnapshot> allOrders;
 
     private Double grandTotal;
     private String paymentStatus;
