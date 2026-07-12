@@ -8,10 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Caching;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.*;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -75,7 +72,7 @@ public class CompletedOrderService {
         });
     }
 
-    public Page<DeliverySummaryDTO> getCompletedOrdersByStaffPaged(String hotelId, String checkoutBy, int pageNumber) {
+    public Page<DailyOrderGroupDTO> getCompletedOrdersByStaffPaged(String hotelId, String checkoutBy, int pageNumber) {
         // Sort by checkoutDate and checkoutTime descending chronologically
         Pageable pageable = PageRequest.of(pageNumber, 10,
                 Sort.by("checkoutDate").descending().and(Sort.by("checkoutTime").descending()));
@@ -83,16 +80,14 @@ public class CompletedOrderService {
         // 1. Fetch the lightweight projected document page from MongoDB filtered by checkoutBy
         Page<CompletedOrder> entities = completeOrderRepository.findByHotelIdAndCheckoutBy(hotelId, checkoutBy, pageable);
 
-        // 2. Map Entities to DeliverySummaryDTO cleanly
-        return entities.map(order -> {
+        // 2. Map Entities to standard DeliverySummaryDTOs first
+        List<DeliverySummaryDTO> flatSummaries = entities.getContent().stream().map(order -> {
             LocalDateTime dateTimeFallback = LocalDateTime.now();
 
             if (order.getCheckoutDate() != null && order.getCheckoutTime() != null) {
                 try {
                     dateTimeFallback = LocalDateTime.parse(order.getCheckoutDate() + "T" + order.getCheckoutTime());
-                } catch (Exception ignored) {
-                    // Fallback safely if string parsing glitches
-                }
+                } catch (Exception ignored) {}
             }
 
             return DeliverySummaryDTO.builder()
@@ -103,7 +98,40 @@ public class CompletedOrderService {
                     .totalPayable(order.getTotalPayable())
                     .checkoutAt(dateTimeFallback)
                     .build();
+        }).collect(Collectors.toList());
+
+        // 🌟 3. GROUP BY DATE: Use LinkedHashMap to perfectly preserve MongoDB's chronological sort order
+        Map<String, List<DeliverySummaryDTO>> groupedMap = flatSummaries.stream().collect(
+                Collectors.groupingBy(
+                        dto -> {
+                            if (dto.getCheckoutAt() != null) {
+                                return dto.getCheckoutAt().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+                            }
+                            return "Unknown Date";
+                        },
+                        LinkedHashMap::new, // Maintains descending order sequence safely
+                        Collectors.toList()
+                )
+        );
+
+        // 🌟 4. CONSTRUCT THE DATE BUCKETS WITH TOTALS
+        List<DailyOrderGroupDTO> contentGroups = new ArrayList<>();
+        groupedMap.forEach((dateStr, dailyOrders) -> {
+            // Calculate the exact cumulative cash values for this specific date group
+            double dailyTotalSum = dailyOrders.stream()
+                    .mapToDouble(o -> o.getTotalPayable() != null ? o.getTotalPayable() : 0.0)
+                    .sum();
+
+            contentGroups.add(DailyOrderGroupDTO.builder()
+                    .date(dateStr)
+                    .totalAmount(dailyTotalSum)
+                    .totalOrder(dailyOrders.size())
+                    .orders(dailyOrders)
+                    .build());
         });
+
+        // 5. Wrap the structural response back into a PageImpl container to keep page controls working
+        return new PageImpl<>(contentGroups, pageable, entities.getTotalElements());
     }
 
     public ReceiptResponse getReceiptDetails(String orderId, String hotelIdFromToken) {

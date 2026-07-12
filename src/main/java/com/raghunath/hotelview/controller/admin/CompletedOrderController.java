@@ -1,9 +1,6 @@
 package com.raghunath.hotelview.controller.admin;
 
-import com.raghunath.hotelview.dto.admin.DeliverySummaryDTO;
-import com.raghunath.hotelview.dto.admin.InventoryItemsResponse;
-import com.raghunath.hotelview.dto.admin.ReceiptResponse;
-import com.raghunath.hotelview.dto.admin.SalesAnalyticsDTO;
+import com.raghunath.hotelview.dto.admin.*;
 import com.raghunath.hotelview.entity.CompletedOrder;
 import com.raghunath.hotelview.service.admin.CompletedOrderService;
 import com.raghunath.hotelview.service.admin.OrderService;
@@ -33,14 +30,14 @@ public class CompletedOrderController {
     }
 
     @GetMapping("/list/staff/{checkoutBy}")
-    public ResponseEntity<Page<DeliverySummaryDTO>> getCompletedListByStaff(
+    public ResponseEntity<Page<DailyOrderGroupDTO>> getCompletedListByStaff(
             @PathVariable String checkoutBy,
             @RequestParam(defaultValue = "0") int page) {
 
         // Extracts context authentication name exactly like your original method
         String hotelId = SecurityContextHolder.getContext().getAuthentication().getName();
 
-        Page<DeliverySummaryDTO> staffOrders = completedOrderService.getCompletedOrdersByStaffPaged(hotelId, checkoutBy, page);
+        Page<DailyOrderGroupDTO> staffOrders = completedOrderService.getCompletedOrdersByStaffPaged(hotelId, checkoutBy, page);
         return ResponseEntity.ok(staffOrders);
     }
 
