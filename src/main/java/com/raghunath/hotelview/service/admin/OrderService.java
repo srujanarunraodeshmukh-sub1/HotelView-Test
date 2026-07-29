@@ -25,6 +25,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.util.StringUtils;
+import com.mongodb.client.result.UpdateResult;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -435,6 +436,12 @@ public class OrderService {
         String fullId = savedBill.getId();
         String shortId = (fullId != null && fullId.length() > 6) ? fullId.substring(fullId.length() - 6) : fullId;
 
+        List<OrderItem> allItems = activeOrders.stream()
+                .filter(o -> o.getItems() != null)
+                .flatMap(o -> o.getItems().stream())
+                .toList();
+        updateDailyAnalytics(hotelId, checkoutBy, totalPayable, allItems, true);
+
         return CheckoutResponse.builder()
                 .id(fullId)
                 .shortId(shortId)
@@ -577,6 +584,8 @@ public class OrderService {
         String fullId = savedBill.getId();
         String shortId = (fullId != null && fullId.length() > 6) ? fullId.substring(fullId.length() - 6) : fullId;
 
+        updateDailyAnalytics(hotelId, actualLoggedInUser, totalPayable, items, true);
+
         return CheckoutResponse.builder()
                 .id(fullId)
                 .shortId(shortId)
@@ -679,6 +688,8 @@ public class OrderService {
         // 6. Build & Return Standardized CheckoutResponse Payload (Cleaned up to match standard logging)
         String fullId = savedBill.getId();
         String shortId = (fullId != null && fullId.length() > 6) ? fullId.substring(fullId.length() - 6) : fullId;
+
+        updateDailyAnalytics(hotelId, actualLoggedInUser, totalPayable, null, false);
 
         return CheckoutResponse.builder()
                 .id(fullId)
@@ -818,6 +829,8 @@ public class OrderService {
                 .price(grandTotal)
                 .build());
 
+        updateDailyAnalytics(hotelId, checkoutBy, totalPayable, null, false);
+
         return CheckoutResponse.builder()
                 .id(fullId)
                 .shortId(shortId)
@@ -839,6 +852,122 @@ public class OrderService {
                 .restaurantUpi(admin.getRestaurantUpi())
                 .restaurantLogo(admin.getRestaurantLogo())
                 .build();
+    }
+
+    private void updateDailyAnalytics(String hotelId, String checkoutBy, Double totalPayable, List<OrderItem> items, boolean trackItems) {
+        try {
+            if (totalPayable == null || totalPayable <= 0) return;
+
+            ZonedDateTime nowIST = getISTNow();
+            String todayStr = nowIST.format(DateTimeFormatter.ISO_LOCAL_DATE); // Format: "YYYY-MM-DD"
+
+            // =========================================================================
+            // 1. UPDATE STAFF COLLECTION SUMMARY
+            // =========================================================================
+            String staffDocId = hotelId + "_" + todayStr + "_STAFF";
+
+            // Resolve Staff / Employee Identifier details
+            String staffIdentifier = checkoutBy != null ? checkoutBy : "SYSTEM";
+            String staffDisplayName = staffIdentifier;
+
+            // Try resolving staff name/ID via Employee collection lookup
+            Optional<Employee> empOpt = mongoTemplate.find(
+                    new Query(Criteria.where("hotelId").is(hotelId).and("username").is(staffIdentifier)),
+                    Employee.class,
+                    "employees"
+            ).stream().findFirst();
+
+            if (empOpt.isPresent()) {
+                Employee emp = empOpt.get();
+                staffIdentifier = emp.getId() != null ? emp.getId() : emp.getUsername();
+                staffDisplayName = emp.getName() != null ? emp.getName() : emp.getUsername();
+            }
+
+            // A. Atomic update: Try to increment existing staff member entry in the array
+            Query staffArrayMatchQuery = new Query(Criteria.where("_id").is(staffDocId).and("staff.staffId").is(staffIdentifier));
+            Update incExistingStaff = new Update()
+                    .inc("totalCollection", totalPayable)
+                    .inc("staff.$.amount", totalPayable);
+
+            UpdateResult staffUpdateResult = mongoTemplate.updateFirst(staffArrayMatchQuery, incExistingStaff, "daily_staff_summary");
+
+            // B. If staff does not exist in array yet, push them into array (or create daily doc if 1st order)
+            if (staffUpdateResult.getMatchedCount() == 0) {
+                Query baseStaffDocQuery = new Query(Criteria.where("_id").is(staffDocId));
+
+                // Build raw Document to match your requested structure exactly
+                org.bson.Document newStaffElement = new org.bson.Document()
+                        .append("staffId", staffIdentifier)
+                        .append("name", staffDisplayName)
+                        .append("amount", totalPayable);
+
+                Update pushNewStaff = new Update()
+                        .setOnInsert("restaurantId", hotelId)
+                        .setOnInsert("date", todayStr)
+                        .inc("totalCollection", totalPayable)
+                        .push("staff", newStaffElement);
+
+                mongoTemplate.upsert(baseStaffDocQuery, pushNewStaff, "daily_staff_summary");
+            }
+
+            // =========================================================================
+            // 2. UPDATE ITEM SALES SUMMARY (Skipped for custom/direct orders)
+            // =========================================================================
+            if (trackItems && items != null && !items.isEmpty()) {
+                String itemDocId = hotelId + "_" + todayStr + "_ITEMS";
+
+                for (OrderItem item : items) {
+                    // Filter out Custom items: Only process items that have a valid DB itemId
+                    if (item.getItemId() == null || item.getItemId().trim().isEmpty()) {
+                        continue;
+                    }
+
+                    String itemId = item.getItemId().trim();
+                    String rawItemName = item.getItemName() != null ? item.getItemName().trim() : "Unknown Item";
+                    String unitStr = item.getUnit() != null ? item.getUnit().trim() : "PIECE";
+
+                    // Parse quantity safely (handles "2", "2.0", "1 Litre", etc.)
+                    double numericQty = 1.0;
+                    if (item.getQuantity() != null) {
+                        try {
+                            String cleanQty = item.getQuantity().replaceAll("[^0-9.]", "");
+                            if (!cleanQty.isEmpty()) {
+                                numericQty = Double.parseDouble(cleanQty);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+
+                    // A. Atomic update: Try to increment existing item entry in the array
+                    Query itemArrayMatchQuery = new Query(Criteria.where("_id").is(itemDocId).and("items.itemId").is(itemId));
+                    Update incExistingItem = new Update()
+                            .inc("totalQtySold", numericQty)
+                            .inc("items.$.qty", numericQty);
+
+                    UpdateResult itemUpdateResult = mongoTemplate.updateFirst(itemArrayMatchQuery, incExistingItem, "daily_item_summary");
+
+                    // B. If item does not exist in array yet, push it into array
+                    if (itemUpdateResult.getMatchedCount() == 0) {
+                        Query baseItemDocQuery = new Query(Criteria.where("_id").is(itemDocId));
+
+                        org.bson.Document newItemElement = new org.bson.Document()
+                                .append("itemId", itemId)
+                                .append("name", rawItemName)
+                                .append("unit", unitStr)
+                                .append("qty", numericQty);
+
+                        Update pushNewItem = new Update()
+                                .setOnInsert("restaurantId", hotelId)
+                                .setOnInsert("date", todayStr)
+                                .inc("totalQtySold", numericQty)
+                                .push("items", newItemElement);
+
+                        mongoTemplate.upsert(baseItemDocQuery, pushNewItem, "daily_item_summary");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("DAILY_ANALYTICS_SYNC_ERROR: Failed updating analytics for hotelId: {}", hotelId, e);
+        }
     }
 
     private void reduceInventoryStock(String hotelId, List<OrderItem> items) {
