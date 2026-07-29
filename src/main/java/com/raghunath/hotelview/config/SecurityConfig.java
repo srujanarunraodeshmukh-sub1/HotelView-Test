@@ -62,6 +62,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // 1. PUBLIC ENDPOINTS (No Token Needed)
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                        .requestMatchers("/actuator/**").hasRole("ADMIN") // Lock down full environment diagnostic endpoints completely
                         .requestMatchers(
                                 "/api/v1/admin/login",
                                 "/api/v1/admin/register",
