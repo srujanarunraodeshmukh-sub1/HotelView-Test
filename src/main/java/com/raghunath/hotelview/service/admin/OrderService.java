@@ -1272,7 +1272,71 @@ public class OrderService {
     }
 
     /**
-     * 10. Get Full Table History via Completed Order ID
+     * 10. FETCH TODAY'S SUMMARY DATA
+     */
+    public DailySummaryResponse getTodaySummary(String hotelId) {
+        String todayStr = getISTNow().format(DateTimeFormatter.ISO_LOCAL_DATE);
+        return getSummaryByDate(hotelId, todayStr);
+    }
+
+    /**
+     * 11. FETCH DATE-WISE SUMMARY DATA (e.g. "2026-07-29")
+     */
+    public DailySummaryResponse getSummaryByDate(String hotelId, String date) {
+        String staffDocId = hotelId + "_" + date + "_STAFF";
+        String itemDocId = hotelId + "_" + date + "_ITEMS";
+
+        // Fetch Staff Collection Document
+        org.bson.Document staffDoc = mongoTemplate.findById(staffDocId, org.bson.Document.class, "daily_staff_summary");
+
+        // Fetch Item Sales Document
+        org.bson.Document itemDoc = mongoTemplate.findById(itemDocId, org.bson.Document.class, "daily_item_summary");
+
+        // Map Staff Summary
+        Double totalStaffColl = 0.0;
+        List<DailySummaryResponse.StaffSummaryDto> staffList = new ArrayList<>();
+
+        if (staffDoc != null) {
+            totalStaffColl = staffDoc.getDouble("totalCollection") != null ? staffDoc.getDouble("totalCollection") : 0.0;
+            List<org.bson.Document> rawStaff = staffDoc.getList("staff", org.bson.Document.class);
+            if (rawStaff != null) {
+                staffList = rawStaff.stream().map(d -> DailySummaryResponse.StaffSummaryDto.builder()
+                        .staffId(d.getString("staffId"))
+                        .name(d.getString("name"))
+                        .amount(d.getDouble("amount") != null ? d.getDouble("amount") : 0.0)
+                        .build()).toList();
+            }
+        }
+
+        // Map Item Summary
+        Double totalQty = 0.0;
+        List<DailySummaryResponse.ItemSummaryDto> itemList = new ArrayList<>();
+
+        if (itemDoc != null) {
+            totalQty = itemDoc.getDouble("totalQtySold") != null ? itemDoc.getDouble("totalQtySold") : 0.0;
+            List<org.bson.Document> rawItems = itemDoc.getList("items", org.bson.Document.class);
+            if (rawItems != null) {
+                itemList = rawItems.stream().map(d -> DailySummaryResponse.ItemSummaryDto.builder()
+                        .itemId(d.getString("itemId"))
+                        .name(d.getString("name"))
+                        .unit(d.getString("unit"))
+                        .qty(d.getDouble("qty") != null ? d.getDouble("qty") : 0.0)
+                        .build()).toList();
+            }
+        }
+
+        return DailySummaryResponse.builder()
+                .date(date)
+                .restaurantId(hotelId)
+                .totalStaffCollection(totalStaffColl)
+                .staffSummary(staffList)
+                .totalQtySold(totalQty)
+                .itemSummary(itemList)
+                .build();
+    }
+
+    /**
+     * 12. Get Full Table History via Completed Order ID
      */
     public Map<String, Object> getAggregatedTableSummary(String hotelId, String completedOrderId) {
         CompletedOrder completedBill = mongoTemplate.findById(completedOrderId, CompletedOrder.class);

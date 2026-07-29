@@ -203,6 +203,28 @@ public class OrderController {
         return ResponseEntity.ok("Order updated and logs saved successfully");
     }
 
+    /**
+     * API 1: Fetch Today's Complete Sales & Staff Summary
+     * Example GET: /api/v1/analytics/summary/today?hotelId=104
+     */
+    @GetMapping("/summary/today")
+    public ResponseEntity<DailySummaryResponse> getTodaySummary(@RequestParam("hotelId") String hotelId) {
+        DailySummaryResponse response = orderService.getTodaySummary(hotelId);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * API 2: Fetch Summary for Any Specific Date
+     * Example GET: /api/v1/analytics/summary/date?hotelId=104&date=2026-07-28
+     */
+    @GetMapping("/summary/date")
+    public ResponseEntity<DailySummaryResponse> getSummaryByDate(
+            @RequestParam("hotelId") String hotelId,
+            @RequestParam("date") String date) { // Expects "YYYY-MM-DD"
+        DailySummaryResponse response = orderService.getSummaryByDate(hotelId, date);
+        return ResponseEntity.ok(response);
+    }
+
     // 10. Get Full Table History via Completed Order ID
     @GetMapping("/summary/completed/{completedOrderId}")
     public ResponseEntity<Map<String, Object>> getFullTableSummary(@PathVariable String completedOrderId) {
