@@ -25,6 +25,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final CacheManager cacheManager; // 👈 Inject your native Spring cache manager
 
     @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
+        // 🌟 FIXED HERE: Use getServletPath() instead of getRequestURI()
+        String path = request.getServletPath();
+        return path.startsWith("/api/v1/user/") ||
+                path.startsWith("/api/v1/info/") ||
+                path.startsWith("/api/v1/admin/login") ||
+                path.startsWith("/api/v1/admin/register") ||
+                path.startsWith("/api/v1/employees/login") ||
+                path.startsWith("/actuator/health");
+    }
+
+    @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {

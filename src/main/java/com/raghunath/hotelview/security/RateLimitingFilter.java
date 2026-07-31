@@ -3,12 +3,14 @@ package com.raghunath.hotelview.security;
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import io.github.bucket4j.Refill;
-import jakarta.servlet.*;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -17,42 +19,43 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Component
-public class RateLimitingFilter implements Filter {
+public class RateLimitingFilter extends OncePerRequestFilter {
 
-    // Separate thread-safe tracking maps to keep performance high
     private final Map<String, Bucket> authCache = new ConcurrentHashMap<>();
     private final Map<String, Bucket> publicCache = new ConcurrentHashMap<>();
 
-    // 🔒 Strict Limit for Critical Auth Endpoints (Login/Register/Token Refresh)
     private Bucket createAuthBucket() {
         return Bucket.builder()
-                // Allows a small burst of 15 attempts, refilling 15 tokens every minute to shield against brute force
                 .addLimit(Bandwidth.classic(15, Refill.intervally(15, Duration.ofMinutes(1))))
                 .build();
     }
 
-    // 🌍 Relaxed Limit for General Public Endpoints (/info/**, public syncs, webhooks)
     private Bucket createPublicBucket() {
         return Bucket.builder()
-                // Allows 100 requests per minute per IP to handle swift multi-asset UI rendering easily
                 .addLimit(Bandwidth.classic(100, Refill.intervally(100, Duration.ofMinutes(1))))
                 .build();
     }
 
+    // 🌟 CRITICAL FIX: Explicitly exclude public customer QR routes from being blocked
     @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
-            throws IOException, ServletException {
+    protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
+        String path = request.getServletPath();
+        return path.startsWith("/api/v1/user/");
+    }
 
-        HttpServletRequest httpRequest = (HttpServletRequest) request;
-        HttpServletResponse httpResponse = (HttpServletResponse) response;
-        String path = httpRequest.getRequestURI();
-        String ip = httpRequest.getRemoteAddr();
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
 
-        // 🛡️ SHIELD 1: PROTECT GATEWAYS (Login, Register, Refresh)
+        String path = request.getServletPath();
+        String ip = request.getRemoteAddr();
+
+        // 🛡️ SHIELD 1: PROTECT GATEWAYS
         if (path.contains("/login") || path.contains("/register") || path.contains("/refresh-token")) {
             Bucket bucket = authCache.computeIfAbsent(ip, k -> createAuthBucket());
             if (!bucket.tryConsume(1)) {
-                sendTooManyRequestsResponse(httpResponse, "Authentication threshold exceeded. Please try again in a minute.");
+                sendTooManyRequestsResponse(response, "Authentication threshold exceeded. Please try again in a minute.");
                 return;
             }
         }
@@ -60,20 +63,16 @@ public class RateLimitingFilter implements Filter {
         else if (path.startsWith("/api/v1/info/") || path.startsWith("/api/v1/sync/")) {
             Bucket bucket = publicCache.computeIfAbsent(ip, k -> createPublicBucket());
             if (!bucket.tryConsume(1)) {
-                sendTooManyRequestsResponse(httpResponse, "Too many requests. Please slow down.");
+                sendTooManyRequestsResponse(response, "Too many requests. Please slow down.");
                 return;
             }
         }
 
-        // 🧼 MEMORY SAFETY GUARD: Prevents continuous accumulation of tracking data from crashing your RAM
-        if (authCache.size() > 10000) {
-            authCache.clear();
-        }
-        if (publicCache.size() > 10000) {
-            publicCache.clear();
-        }
+        // MEMORY SAFETY GUARD
+        if (authCache.size() > 10000) authCache.clear();
+        if (publicCache.size() > 10000) publicCache.clear();
 
-        chain.doFilter(request, response);
+        filterChain.doFilter(request, response);
     }
 
     private void sendTooManyRequestsResponse(HttpServletResponse response, String message) throws IOException {

@@ -112,7 +112,10 @@ public class OrderController {
     @GetMapping("/table/{tableName}")
     public ResponseEntity<List<KitchenOrder>> getTableOrders(@PathVariable String tableName) {
         String hotelId = SecurityContextHolder.getContext().getAuthentication().getName();
-        return ResponseEntity.ok(orderService.getOrdersByTable(hotelId, tableName));
+
+        // 🌟 FIX: Directly pass the List<KitchenOrder> returned by the service
+        List<KitchenOrder> orders = orderService.getOrdersByTable(hotelId, tableName);
+        return ResponseEntity.ok(orders);
     }
 
     // 6. CHECKOUT ORDER FOR TABLE
@@ -251,5 +254,29 @@ public class OrderController {
         String userId = SecurityContextHolder.getContext().getAuthentication().getName();
         String kitchenOrderId = orderService.approveExternalOrder(orderId, userId);
         return ResponseEntity.ok("External order approved. Kitchen Order ID: " + kitchenOrderId);
+    }
+
+    // 13. ACCEPT CUSTOMER QR ORDER (Requires JWT Authorization)
+    @PostMapping("/accept-customer-order")
+    public ResponseEntity<Map<String, Object>> acceptCustomerOrder(
+            @RequestHeader("Authorization") String authHeader,
+            @Valid @RequestBody AcceptCustomerOrderRequest request) {
+
+        // Extract token payload properties cleanly
+        String token = authHeader.substring(7).trim();
+        String hotelId = jwtUtil.extractHotelId(token);
+        String staffId = jwtUtil.extractUserId(token); // Waiter/Admin ID from token
+
+        KitchenOrder kitchenOrder = orderService.acceptCustomerOrder(
+                hotelId,
+                request.getCustomerOrderId(),
+                staffId
+        );
+
+        return ResponseEntity.ok(Map.of(
+                "status", "SUCCESS",
+                "message", "Order accepted successfully and sent to kitchen.",
+                "kitchenOrderId", kitchenOrder.getId()
+        ));
     }
 }

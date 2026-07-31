@@ -29,6 +29,7 @@ public class MenuItemService {
     @Caching(evict = {
             @CacheEvict(value = "menuSummaryCache", key = "#hotelIdFromToken"),
             @CacheEvict(value = "menuCache", key = "#hotelIdFromToken"),
+            @CacheEvict(value = "menuCache", key = "'user_' + #hotelId"),
             @CacheEvict(value = "dashboardStatsCache", key = "#hotelIdFromToken")
     })
     public String addMenuItem(MenuItemRequest request, String hotelIdFromToken) {
@@ -81,6 +82,7 @@ public class MenuItemService {
     @Caching(evict = {
             @CacheEvict(value = "menuSummaryCache", key = "#hotelId"),
             @CacheEvict(value = "menuCache", key = "#hotelId"),
+            @CacheEvict(value = "menuCache", key = "'user_' + #hotelId"),
             @CacheEvict(value = "dashboardStatsCache", key = "#hotelId")
     })
     public MenuItemSummaryDTO updateMenuItem(String hotelId, String itemId, MenuItemUpdateDTO dto) {
@@ -132,6 +134,7 @@ public class MenuItemService {
     @Caching(evict = {
             @CacheEvict(value = "menuSummaryCache", key = "#hotelId"),
             @CacheEvict(value = "menuCache", key = "#hotelId"),
+            @CacheEvict(value = "menuCache", key = "'user_' + #hotelId"),
             @CacheEvict(value = "dashboardStatsCache", key = "#hotelId") // 👈 ADD THIS LINE
     })
     public MenuItemSummaryDTO toggleAvailabilityAndReturnDto(String hotelId, String itemId, boolean available) {
@@ -220,6 +223,7 @@ public class MenuItemService {
     @Caching(evict = {
             @CacheEvict(value = "menuSummaryCache", key = "#hotelIdFromToken"),
             @CacheEvict(value = "menuCache", key = "#hotelIdFromToken"),
+            @CacheEvict(value = "menuCache", key = "'user_' + #hotelId"),
             @CacheEvict(value = "dashboardStatsCache", key = "#hotelIdFromToken")
     })
     public String softDeleteMenuItem(String hotelId, String itemId) {

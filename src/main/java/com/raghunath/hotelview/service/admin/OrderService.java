@@ -47,6 +47,7 @@ public class OrderService {
     private final VersionService versionService;
     private final ExternalOrderRepository externalOrderRepository;
     private final SalesAggregationRepository salesAggregationRepository;
+    private final CustomerOrderRepository customerOrderRepository;
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
     @Autowired
@@ -288,9 +289,58 @@ public class OrderService {
     /**
      * 5. FETCH TABLE ORDERS: Latest orders first.
      */
+    /**
+     * 5. FETCH TABLE ORDERS: Latest orders first.
+     * Fetches both Kitchen Orders AND pending Customer QR Orders for the table,
+     * merging them into the exact same List<KitchenOrder> array structure.
+     */
     public List<KitchenOrder> getOrdersByTable(String hotelId, String tableName) {
-        return kitchenOrderRepository.findByHotelIdAndTableNameAndStatusNotOrderByCreatedDateDescCreatedTimeDesc(
-                hotelId, tableName, "PAID");
+        validateTableExists(hotelId, tableName);
+
+        // 1. Fetch active orders from kitchen_orders
+        List<KitchenOrder> kitchenOrders = kitchenOrderRepository
+                .findByHotelIdAndTableNameAndStatusNotOrderByCreatedDateDescCreatedTimeDesc(
+                        hotelId, tableName, "PAID");
+
+        // 2. Fetch pending QR orders from customer_table_orders
+        List<CustomerOrder> customerOrders = customerOrderRepository
+                .findByHotelIdAndTableNameAndStatusNotOrderByCreatedDateDescCreatedTimeDesc(
+                        hotelId, tableName, "PAID");
+
+        if (customerOrders == null || customerOrders.isEmpty()) {
+            return kitchenOrders;
+        }
+
+        // 3. Convert pending CustomerOrders to KitchenOrder structure seamlessly
+        List<KitchenOrder> pendingConverted = customerOrders.stream()
+                .map(co -> KitchenOrder.builder()
+                        .id(co.getId())
+                        .hotelId(co.getHotelId())
+                        .tableName(co.getTableName())
+                        .orderType(co.getOrderType() != null ? co.getOrderType() : "TABLE")
+                        .items(co.getItems())
+                        .totalAmount(co.getTotalAmount())
+                        .status(co.getStatus()) // "PENDING_ACCEPTANCE"
+                        .comments(co.getComments())
+                        .placedBy(co.getPlacedBy() != null ? co.getPlacedBy() : "CUSTOMER") // Indicates QR order awaiting approval
+                        .acceptedBy(co.getEmployeeAcceptedBy())
+                        .createdDate(co.getCreatedDate())
+                        .createdTime(co.getCreatedTime())
+                        .build())
+                .toList();
+
+        // 4. Merge both lists together
+        List<KitchenOrder> combinedList = new ArrayList<>(pendingConverted);
+        combinedList.addAll(kitchenOrders);
+
+        // 5. Sort combined list by date & time descending (latest orders first)
+        combinedList.sort((o1, o2) -> {
+            String dt1 = (o1.getCreatedDate() != null ? o1.getCreatedDate() : "") + " " + (o1.getCreatedTime() != null ? o1.getCreatedTime() : "");
+            String dt2 = (o2.getCreatedDate() != null ? o2.getCreatedDate() : "") + " " + (o2.getCreatedTime() != null ? o2.getCreatedTime() : "");
+            return dt2.compareTo(dt1);
+        });
+
+        return combinedList;
     }
 
     /**
@@ -968,6 +1018,56 @@ public class OrderService {
         } catch (Exception e) {
             log.error("DAILY_ANALYTICS_SYNC_ERROR: Failed updating analytics for hotelId: {}", hotelId, e);
         }
+    }
+
+    /**
+     * ACCEPT CUSTOMER QR ORDER (Admin/Employee Action)
+     * Validates customer QR order, creates an entry in kitchen_orders with "placedBy" details,
+     * updates table bill balance, and DELETES the staging record from customer_table_orders.
+     */
+    @Caching(evict = {
+            @CacheEvict(value = "dashboardStatsCache", key = "#hotelId"),
+            @CacheEvict(value = "orderCache", key = "#hotelId + '-today'")
+    })
+    @Transactional
+    public KitchenOrder acceptCustomerOrder(String hotelId, String customerOrderId, String staffId) {
+
+        // 1. Fetch pending customer QR order from staging repository
+        CustomerOrder cOrder = customerOrderRepository.findById(customerOrderId)
+                .orElseThrow(() -> new RuntimeException("Customer order not found with ID: " + customerOrderId));
+
+        if (!cOrder.getHotelId().equals(hotelId)) {
+            throw new RuntimeException("Unauthorized: Order does not belong to this hotel");
+        }
+
+        // 2. Create KitchenOrder for Kitchen Display System (KDT)
+        KitchenOrder kOrder = KitchenOrder.builder()
+                .hotelId(cOrder.getHotelId())
+                .tableName(cOrder.getTableName())
+                .orderType(StringUtils.hasText(cOrder.getOrderType()) ? cOrder.getOrderType() : "TABLE")
+                .items(cOrder.getItems())
+                .totalAmount(cOrder.getTotalAmount())
+                .status("PENDING") // Pushed to kitchen
+                .comments(cOrder.getComments())
+                .placedBy("CUSTOMER (Accepted by " + staffId + ")") // 🌟 Preserves audit trail in KitchenOrder
+                .createdDate(cOrder.getCreatedDate())
+                .createdTime(cOrder.getCreatedTime())
+                .build();
+
+        KitchenOrder savedKitchenOrder = kitchenOrderRepository.save(kOrder);
+
+        // 3. Update Table Visual Status & Active Bill Balance
+        if (StringUtils.hasText(cOrder.getTableName())) {
+            updateTableVisualStatus(hotelId, cOrder.getTableName(), "PENDING");
+            updateTableBill(hotelId, cOrder.getTableName(), cOrder.getTotalAmount(), false);
+        }
+
+        // 4. 🌟 CLEANUP: Remove from staging collection since it is now a standard live order
+        customerOrderRepository.delete(cOrder);
+
+        versionService.bumpTables(hotelId);
+
+        return savedKitchenOrder;
     }
 
     private void reduceInventoryStock(String hotelId, List<OrderItem> items) {

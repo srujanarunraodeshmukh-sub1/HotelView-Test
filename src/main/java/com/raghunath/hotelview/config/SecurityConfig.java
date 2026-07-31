@@ -63,7 +63,9 @@ public class SecurityConfig {
                         // 1. PUBLIC ENDPOINTS (No Token Needed)
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/info").permitAll()
-                        .requestMatchers("/actuator/**").hasRole("ADMIN") // Lock down full environment diagnostic endpoints completely
+                        .requestMatchers("/api/v1/user/**").permitAll()
+                        .requestMatchers("/error").permitAll()
+                        // Lock down full environment diagnostic endpoints completely
                         .requestMatchers(
                                 "/api/v1/admin/login",
                                 "/api/v1/admin/register",
@@ -77,6 +79,8 @@ public class SecurityConfig {
                                 "/api/v1/orders/webhook",
                                 "/ws-node/**"
                         ).permitAll()
+
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         .requestMatchers("/api/v1/admin/logout", "/api/v1/employees/logout").authenticated()
 
@@ -149,7 +153,7 @@ public class SecurityConfig {
 
                 // 🌟 PROTECT SYSTEM: Intercept & drop brute-force attacks at edge layer before spending RAM evaluating JWT tokens
                 .addFilterBefore(rateLimitingFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(jwtAuthenticationFilter, RateLimitingFilter.class)
                 .formLogin(form -> form.disable())
                 .httpBasic(basic -> basic.disable());
 
