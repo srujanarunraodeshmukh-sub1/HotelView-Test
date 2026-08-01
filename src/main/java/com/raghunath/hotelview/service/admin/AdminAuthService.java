@@ -283,6 +283,9 @@ public class AdminAuthService {
         admin.setRestaurantLogo(updates.getRestaurantLogo());
         admin.setRestaurantUpi(updates.getRestaurantUpi());
 
+        admin.setGstNumber(updates.getGstNumber());
+        admin.setGstDetails(updates.getGstDetails());
+
         // planType is NOT updated here
 
         Admin savedAdmin = adminRepository.save(admin);
@@ -374,6 +377,8 @@ public class AdminAuthService {
                 .restaurantLogo(admin.getRestaurantLogo())
                 .restaurantUpi(admin.getRestaurantUpi())
                 .planType(admin.getPlanType())
+                .gstNumber(admin.getGstNumber())
+                .gstDetails(admin.getGstDetails())
                 .build();
     }
 

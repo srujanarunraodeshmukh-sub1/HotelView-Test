@@ -64,6 +64,9 @@ public class MenuItem {
     @Field("preparationTime")
     private Integer preparationTime;
 
+    @Field("gstPercent")
+    private Double gstPercent;
+
     @Field("isApproved")
     private Boolean isApproved;
 

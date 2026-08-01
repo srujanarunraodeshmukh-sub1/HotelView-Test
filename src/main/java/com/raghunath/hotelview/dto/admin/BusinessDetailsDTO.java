@@ -2,6 +2,8 @@ package com.raghunath.hotelview.dto.admin;
 
 import lombok.*;
 
+import java.util.List;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -13,4 +15,7 @@ public class BusinessDetailsDTO {
     private String restaurantLogo;
     private String restaurantUpi;
     private String planType;
+    private String gstNumber;
+    private String gstTaxMode;
+    private List<GstDetailDTO> gstDetails;
 }

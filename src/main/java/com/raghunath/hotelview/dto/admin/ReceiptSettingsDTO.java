@@ -1,6 +1,9 @@
 package com.raghunath.hotelview.dto.admin;
 
+import com.raghunath.hotelview.dto.ReceiptGstToggleDTO;
 import lombok.*;
+
+import java.util.List;
 
 @Data
 @Builder
@@ -18,4 +21,6 @@ public class ReceiptSettingsDTO {
     private boolean printUpiAndQr;
     private boolean printGreetingNote;
     private boolean printItemQuantities;
+    private boolean printGstNumber;
+    private List<ReceiptGstToggleDTO> gstDetails;
 }

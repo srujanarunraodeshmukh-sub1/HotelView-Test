@@ -1,8 +1,11 @@
 package com.raghunath.hotelview.entity;
 
+import com.raghunath.hotelview.dto.ReceiptGstToggleDTO;
 import lombok.*;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+
+import java.util.List;
 
 @Data
 @Builder
@@ -26,5 +29,8 @@ public class ReceiptSettings {
     private boolean showCustomerDetails;
     private boolean printUpiAndQr;
     private boolean printGreetingNote;
+
+    private boolean printGstNumber;
+    private List<ReceiptGstToggleDTO> gstDetails;
     private boolean printItemQuantities;
 }

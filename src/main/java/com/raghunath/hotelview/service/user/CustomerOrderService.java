@@ -19,7 +19,9 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
@@ -86,7 +88,10 @@ public class CustomerOrderService {
             combinedOrders.addAll(activeKitchenOrders);
         }
 
-        return combinedOrders;
+        return Collections.singletonList(Map.of(
+                "restaurantName", admin.getRestaurantName() != null ? admin.getRestaurantName() : "",
+                "orders", combinedOrders
+        ));
     }
 
     /**

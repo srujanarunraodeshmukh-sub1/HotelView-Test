@@ -288,9 +288,6 @@ public class OrderService {
 
     /**
      * 5. FETCH TABLE ORDERS: Latest orders first.
-     */
-    /**
-     * 5. FETCH TABLE ORDERS: Latest orders first.
      * Fetches both Kitchen Orders AND pending Customer QR Orders for the table,
      * merging them into the exact same List<KitchenOrder> array structure.
      */

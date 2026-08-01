@@ -1,5 +1,6 @@
 package com.raghunath.hotelview.entity;
 
+import com.raghunath.hotelview.dto.admin.GstDetailDTO;
 import lombok.*;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
@@ -7,6 +8,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -52,6 +54,9 @@ public class Admin {
     private String restaurantContact;
     private String restaurantLogo;
     private String restaurantUpi;
+
+    private String gstNumber;
+    private List<GstDetailDTO> gstDetails;
 
     private String privacyPolicyStatus;
     private java.time.LocalDateTime privacyPolicySignedAt;
