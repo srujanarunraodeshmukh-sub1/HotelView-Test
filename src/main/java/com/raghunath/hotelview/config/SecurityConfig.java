@@ -171,7 +171,7 @@ public class SecurityConfig {
                 "https://localhost",
                 "capacitor://localhost",
                 "https://www.madhavaglobal.in",
-                "https://hotel-view-scanner.vercel.app/git "
+                "https://hotel-view-scanner.vercel.app"
         ));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
