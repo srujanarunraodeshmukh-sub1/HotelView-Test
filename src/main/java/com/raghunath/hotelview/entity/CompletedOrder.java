@@ -7,6 +7,7 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.util.List;
+import java.util.Map;
 
 @Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
 @Document(collection = "completed_orders")
@@ -31,6 +32,8 @@ public class CompletedOrder {
     private Double totalPayable;
 
     private Double lastTotalPayable;
+
+    private List<Map<String, Object>> gsttype;
 
     private String checkoutBy;
     private String checkoutDate;

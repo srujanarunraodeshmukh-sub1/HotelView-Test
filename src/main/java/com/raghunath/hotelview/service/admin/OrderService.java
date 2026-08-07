@@ -54,6 +54,25 @@ public class OrderService {
     private org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate;
 
     /**
+     * Helper to resolve GST Number based on ReceiptSettings and Admin
+     */
+    /**
+     * Helper to resolve GST Number based on ReceiptSettings and Admin
+     */
+    private String resolveGstNumber(ReceiptSettings settings, Admin admin) {
+        if (settings != null && Boolean.FALSE.equals(settings.isPrintGstNumber())) {
+            return null; // Suppress GST number if explicitly disabled in receipt settings
+        }
+        if (admin == null) {
+            return null;
+        }
+        if (StringUtils.hasText(admin.getGstNumber())) {
+            return admin.getGstNumber().trim();
+        }
+        return null;
+    }
+
+    /**
      * 1. SAVE DRAFT: Waiter/Admin adds items.
      */
     public void saveDraft(String hotelId, String tableName, List<OrderItem> items) {
@@ -354,7 +373,6 @@ public class OrderService {
     })
     @Transactional
     public CheckoutResponse checkoutOrders(String hotelId, CheckoutRequest request, String checkoutBy) {
-        // 1. Subscription Check
         Admin admin = adminRepository.findByHotelId(hotelId)
                 .orElseThrow(() -> new RuntimeException("Admin not found"));
 
@@ -362,7 +380,6 @@ public class OrderService {
             throw new RuntimeException("Your subscription plan has ended.");
         }
 
-        // 2. Fetch Active Orders
         List<KitchenOrder> activeOrders = kitchenOrderRepository.findAllById(request.getOrderIds());
         if (activeOrders.isEmpty()) {
             throw new RuntimeException("No active orders found");
@@ -370,12 +387,10 @@ public class OrderService {
         String tableName = activeOrders.get(0).getTableName();
         String parentOrderType = activeOrders.get(0).getOrderType() != null ? activeOrders.get(0).getOrderType() : "TABLE";
 
-        // 🌟 Runs safely now since we optimized reduceInventoryStock to prefer item.getItemId()!
         for (KitchenOrder order : activeOrders) {
             reduceInventoryStock(hotelId, order.getItems());
         }
 
-        // 3. Aggregate Items cleanly across multiple sub-orders
         Map<String, CheckoutResponse.BillItem> itemMap = new HashMap<>();
         for (KitchenOrder order : activeOrders) {
             if (order.getItems() == null) continue;
@@ -385,12 +400,9 @@ public class OrderService {
 
                 String rawName = item.getItemName().trim();
                 String normalizedKey = rawName.toLowerCase();
-
-                // 🌟 FIX: Pull the saved unit directly out of the order item snapshot instead of querying by name
                 String itemUnit = item.getUnit() != null ? item.getUnit().trim() : "PIECE";
 
                 double directSubTotal = item.getSubTotal() != null ? item.getSubTotal() : 0.0;
-                double baseUnitPrice = item.getPrice() != null ? item.getPrice() : 0.0;
 
                 CheckoutResponse.BillItem initialVal = CheckoutResponse.BillItem.builder()
                         .itemName(rawName)
@@ -433,8 +445,13 @@ public class OrderService {
 
         Double grandTotal = activeOrders.stream().mapToDouble(KitchenOrder::getTotalAmount).sum();
         Double discountPercent = (request.getDiscount() != null) ? request.getDiscount() : 0.0;
-        Double discountAmount = (grandTotal * discountPercent) / 100;
-        Double totalPayable = grandTotal - discountAmount;
+        Double discountAmount = (grandTotal * discountPercent) / 100.0;
+
+        List<CheckoutResponse.BillItem> billItems = new ArrayList<>(itemMap.values());
+
+        // 🌟 CALCULATE GST AND TAX BREAKDOWN
+        TaxCalculationContext taxCtx = processTaxAndTotals(hotelId, parentOrderType, grandTotal, discountAmount, billItems);
+        Double totalPayable = taxCtx.totalPayable();
 
         ZonedDateTime nowIST = getISTNow();
 
@@ -449,12 +466,11 @@ public class OrderService {
                         .createdDate(order.getCreatedDate())
                         .createdTime(order.getCreatedTime())
                         .build()
-        ).collect(java.util.stream.Collectors.toList());
+        ).collect(Collectors.toList());
 
-        // 4. Build and Save Completed Order
         CompletedOrder finalBill = CompletedOrder.builder()
                 .hotelId(hotelId)
-                .orderType(activeOrders.get(0).getOrderType())
+                .orderType(parentOrderType)
                 .tableName(tableName)
                 .customerName(StringUtils.hasText(request.getCustomerName()) ? request.getCustomerName() : "Walk-in Guest")
                 .customerMobile(StringUtils.hasText(request.getCustomerMobile()) ? request.getCustomerMobile() : "0000000000")
@@ -465,6 +481,7 @@ public class OrderService {
                 .discountPercent(discountPercent)
                 .discountAmount(discountAmount)
                 .totalPayable(totalPayable)
+                .gsttype(taxCtx.gstTypeList())
                 .checkoutBy(checkoutBy)
                 .checkoutDate(nowIST.format(DateTimeFormatter.ISO_LOCAL_DATE))
                 .checkoutTime(nowIST.format(DateTimeFormatter.ofPattern("HH:mm:ss")))
@@ -472,14 +489,12 @@ public class OrderService {
 
         CompletedOrder savedBill = completeOrderRepository.save(finalBill);
 
-        // 5. Cleanup and Sync
         if (savedBill.getId() != null) {
             syncCustomerDetails(hotelId, finalBill);
             kitchenOrderRepository.deleteAll(activeOrders);
             updateTableBill(hotelId, tableName, 0.0, true);
         }
 
-        // 6. Build Response
         String fullId = savedBill.getId();
         String shortId = (fullId != null && fullId.length() > 6) ? fullId.substring(fullId.length() - 6) : fullId;
 
@@ -487,7 +502,10 @@ public class OrderService {
                 .filter(o -> o.getItems() != null)
                 .flatMap(o -> o.getItems().stream())
                 .toList();
-        updateDailyAnalytics(hotelId, checkoutBy, totalPayable, allItems, true);
+
+        updateDailyAnalytics(hotelId, checkoutBy, totalPayable, allItems, true, taxCtx.gstTypeList());
+
+        String gstNo = resolveGstNumber(taxCtx.receiptSettings(), admin);
 
         return CheckoutResponse.builder()
                 .id(fullId)
@@ -499,11 +517,13 @@ public class OrderService {
                 .customerName(finalBill.getCustomerName())
                 .customerMobile(finalBill.getCustomerMobile())
                 .customerAddress(finalBill.getCustomerAddress())
-                .items(new ArrayList<>(itemMap.values()))
+                .items(billItems)
                 .grandTotal(grandTotal)
                 .discountPercent(discountPercent)
                 .discountAmount(discountAmount)
                 .totalPayable(totalPayable)
+                .gsttype(taxCtx.gstTypeList())
+                .restaurantGstNo(gstNo)
                 .restaurantName(admin.getRestaurantName())
                 .restaurantAddress(admin.getRestaurantAddress())
                 .restaurantContact(admin.getRestaurantContact())
@@ -542,7 +562,6 @@ public class OrderService {
         Double grandTotal = items.stream().mapToDouble(OrderItem::getSubTotal).sum();
         Double discountPercent = request.getDiscountPercent() != null ? request.getDiscountPercent() : 0.0;
         Double discountAmount = (grandTotal * discountPercent) / 100.0;
-        Double totalPayable = Math.max(0.0, grandTotal - discountAmount);
 
         ZonedDateTime nowIST = getISTNow();
 
@@ -558,7 +577,6 @@ public class OrderService {
 
                 String menuUnit = "PIECE";
 
-                // 🌟 Query by itemId instead of Name to ensure an absolute unique result and avoid duplicate record naming crashes
                 if (item.getItemId() != null && !item.getItemId().trim().isEmpty()) {
                     Optional<?> menuItemOpt = menuItemRepository.findById(item.getItemId().trim());
 
@@ -569,7 +587,6 @@ public class OrderService {
                         }
                     }
                 } else {
-                    // Fallback: If itemId isn't provided, use name but get the first result rather than crashing
                     List<com.raghunath.hotelview.entity.MenuItem> fallbackList = mongoTemplate.find(
                             new Query(Criteria.where("hotelId").is(hotelId)
                                     .and("name").regex("^" + java.util.regex.Pattern.quote(item.getItemName()) + "$", "i")),
@@ -586,28 +603,31 @@ public class OrderService {
             });
         }
 
-        // 🌟 2. DYNAMIC INVENTORY STOCK DEDUCTION (Now runs safely with pre-mapped unit snapshot configurations!)
+        // 🌟 2. Inventory stock deduction (bumps updatedAt timestamp for versioning)
         reduceInventoryStock(hotelId, items);
 
-        // 3. IN-MEMORY TRANSIENT OBJECT
+        // 3. Transient Snapshot Object
         KitchenOrderSnapshot transientOrderSnapshot = KitchenOrderSnapshot.builder()
                 .items(items)
                 .totalAmount(grandTotal)
-                // Implicitly left out: hotelId, tableName, orderType do not exist in the snapshot class!
                 .build();
 
-        // 4. Prepare Bill Items
+        // 4. Prepare Initial Bill Items
         List<CheckoutResponse.BillItem> billItems = items.stream()
                 .map(item -> CheckoutResponse.BillItem.builder()
                         .itemName(item.getItemName())
                         .quantity(item.getQuantity())
-                        .price(item.getPrice() != null ? item.getPrice() : item.getSubTotal()) // Fallback protect raw base pricing calculations
+                        .price(item.getPrice() != null ? item.getPrice() : item.getSubTotal())
                         .unit(item.getUnit())
-                        .subTotal(item.getSubTotal() != null ? item.getSubTotal() : 0.0) // 🌟 Mapped cleanly as Double
+                        .subTotal(item.getSubTotal() != null ? item.getSubTotal() : 0.0)
                         .build())
                 .toList();
 
-        // 5. Construct and Save CompletedOrder
+        // 🌟 5. EXCLUSIVE TAX ENGINE (Applies either Item-Level OR Global GST at a time)
+        TaxCalculationContext taxCtx = processTaxAndTotals(hotelId, "INSTANT", grandTotal, discountAmount, billItems);
+        Double totalPayable = taxCtx.totalPayable();
+
+        // 6. Construct and Save CompletedOrder
         CompletedOrder finalBill = CompletedOrder.builder()
                 .hotelId(hotelId)
                 .orderType("INSTANT")
@@ -620,6 +640,7 @@ public class OrderService {
                 .discountPercent(discountPercent)
                 .discountAmount(discountAmount)
                 .totalPayable(totalPayable)
+                .gsttype(taxCtx.gstTypeList()) // 🌟 Save applied GST breakdown
                 .checkoutBy(actualLoggedInUser)
                 .checkoutDate(nowIST.format(DateTimeFormatter.ISO_LOCAL_DATE))
                 .checkoutTime(nowIST.format(DateTimeFormatter.ofPattern("HH:mm:ss")))
@@ -627,11 +648,13 @@ public class OrderService {
 
         CompletedOrder savedBill = completeOrderRepository.save(finalBill);
 
-        // 6. Build Response
+        // 7. Build Response
         String fullId = savedBill.getId();
         String shortId = (fullId != null && fullId.length() > 6) ? fullId.substring(fullId.length() - 6) : fullId;
 
-        updateDailyAnalytics(hotelId, actualLoggedInUser, totalPayable, items, true);
+        updateDailyAnalytics(hotelId, actualLoggedInUser, totalPayable, items, true, taxCtx.gstTypeList());
+
+        String gstNo = resolveGstNumber(taxCtx.receiptSettings(), admin);
 
         return CheckoutResponse.builder()
                 .id(fullId)
@@ -639,9 +662,22 @@ public class OrderService {
                 .checkoutDate(finalBill.getCheckoutDate())
                 .checkoutTime(finalBill.getCheckoutTime())
                 .orderType("INSTANT")
+                .tableName(null)
+                .customerName(null)
+                .customerMobile(null)
+                .customerAddress(null)
                 .items(billItems)
                 .grandTotal(grandTotal)
+                .discountPercent(discountPercent)
+                .discountAmount(discountAmount)
                 .totalPayable(totalPayable)
+                .gsttype(taxCtx.gstTypeList())
+                .restaurantGstNo(gstNo)
+                .restaurantName(admin.getRestaurantName())
+                .restaurantAddress(admin.getRestaurantAddress())
+                .restaurantContact(admin.getRestaurantContact())
+                .restaurantUpi(admin.getRestaurantUpi())
+                .restaurantLogo(admin.getRestaurantLogo())
                 .build();
     }
 
@@ -671,13 +707,12 @@ public class OrderService {
         Double grandTotal = items.stream().mapToDouble(OrderItem::getSubTotal).sum();
         Double discountPercent = request.getDiscountPercent() != null ? request.getDiscountPercent() : 0.0;
         Double discountAmount = (grandTotal * discountPercent) / 100.0;
-        Double totalPayable = Math.max(0.0, grandTotal - discountAmount);
 
         ZonedDateTime nowIST = getISTNow();
         String currentDateStr = nowIST.format(DateTimeFormatter.ISO_LOCAL_DATE);
         String currentTimeStr = nowIST.format(DateTimeFormatter.ofPattern("HH:mm:ss"));
 
-        // 2. Build Sanitized In-Memory OrderItems List (Ensuring clean Strings)
+        // 2. Build Sanitized In-Memory OrderItems List
         List<OrderItem> sanitizedItems = items.stream().map(item -> {
             String qtyStr = item.getQuantity() != null ? String.valueOf(item.getQuantity()).trim() : "1";
             return OrderItem.builder()
@@ -688,7 +723,7 @@ public class OrderService {
                     .build();
         }).toList();
 
-        // 3. Construct the Transient KitchenOrder Document Wrapper
+        // 3. Construct Transient KitchenOrder Document Wrapper
         KitchenOrderSnapshot transientOrderSnapshot = KitchenOrderSnapshot.builder()
                 .id(new org.bson.types.ObjectId().toString())
                 .items(sanitizedItems)
@@ -700,19 +735,23 @@ public class OrderService {
                 .updatedAt(nowIST.toLocalDateTime())
                 .createdDate(currentDateStr)
                 .createdTime(currentTimeStr)
-                // Perfect! hotelId, tableName, and orderType are excluded automatically
                 .build();
 
-        // 4. Map Response Items (Matching your exact production output model layouts)
+        // 4. Map Response Items
         List<CheckoutResponse.BillItem> billItems = sanitizedItems.stream()
                 .map(item -> CheckoutResponse.BillItem.builder()
                         .itemName(item.getItemName())
-                        .quantity(item.getQuantity()) // Keep as String matching production
-                        .price(item.getSubTotal())   // Matches production layout (quantity * unit price)
+                        .quantity(item.getQuantity())
+                        .price(item.getSubTotal())
+                        .subTotal(item.getSubTotal())
                         .build())
                 .toList();
 
-        // 5. Construct and Save Final CompletedOrder Collection Entry (Enforcing exact production nulls)
+        // 🌟 5. EXCLUSIVE TAX ENGINE (Applies either Item-Level OR Global GST at a time)
+        TaxCalculationContext taxCtx = processTaxAndTotals(hotelId, "INSTANT", grandTotal, discountAmount, billItems);
+        Double totalPayable = taxCtx.totalPayable();
+
+        // 6. Construct and Save Final CompletedOrder Entry
         CompletedOrder finalBill = CompletedOrder.builder()
                 .hotelId(hotelId)
                 .orderType("INSTANT")
@@ -725,6 +764,7 @@ public class OrderService {
                 .discountPercent(discountPercent)
                 .discountAmount(discountAmount)
                 .totalPayable(totalPayable)
+                .gsttype(taxCtx.gstTypeList()) // 🌟 Save applied GST breakdown
                 .checkoutBy(actualLoggedInUser)
                 .checkoutDate(currentDateStr)
                 .checkoutTime(currentTimeStr)
@@ -732,11 +772,13 @@ public class OrderService {
 
         CompletedOrder savedBill = completeOrderRepository.save(finalBill);
 
-        // 6. Build & Return Standardized CheckoutResponse Payload (Cleaned up to match standard logging)
+        // 7. Build & Return Standardized CheckoutResponse Payload
         String fullId = savedBill.getId();
         String shortId = (fullId != null && fullId.length() > 6) ? fullId.substring(fullId.length() - 6) : fullId;
 
-        updateDailyAnalytics(hotelId, actualLoggedInUser, totalPayable, null, false);
+        updateDailyAnalytics(hotelId, actualLoggedInUser, totalPayable, null, false, taxCtx.gstTypeList());
+
+        String gstNo = resolveGstNumber(taxCtx.receiptSettings(), admin);
 
         return CheckoutResponse.builder()
                 .id(fullId)
@@ -744,9 +786,22 @@ public class OrderService {
                 .checkoutDate(finalBill.getCheckoutDate())
                 .checkoutTime(finalBill.getCheckoutTime())
                 .orderType("INSTANT")
+                .tableName(null)
+                .customerName(null)
+                .customerMobile(null)
+                .customerAddress(null)
                 .items(billItems)
                 .grandTotal(grandTotal)
+                .discountPercent(discountPercent)
+                .discountAmount(discountAmount)
                 .totalPayable(totalPayable)
+                .gsttype(taxCtx.gstTypeList())
+                .restaurantGstNo(gstNo)
+                .restaurantName(admin.getRestaurantName())
+                .restaurantAddress(admin.getRestaurantAddress())
+                .restaurantContact(admin.getRestaurantContact())
+                .restaurantUpi(admin.getRestaurantUpi())
+                .restaurantLogo(admin.getRestaurantLogo())
                 .build();
     }
 
@@ -777,25 +832,22 @@ public class OrderService {
 
         Double grandTotal = request.getTotalAmount();
         Double discountPercent = (request.getDiscount() != null) ? request.getDiscount() : 0.0;
-        Double discountAmount = (grandTotal * discountPercent) / 100;
-        Double totalPayable = grandTotal - discountAmount;
+        Double discountAmount = (grandTotal * discountPercent) / 100.0;
 
         ZonedDateTime nowIST = getISTNow();
         String currentDateStr = nowIST.format(DateTimeFormatter.ISO_LOCAL_DATE);
         String currentTimeStr = nowIST.format(DateTimeFormatter.ofPattern("HH:mm:ss"));
 
-        // 3. Construct Raw Items Array List to match your standard inner model formats
+        // 3. Construct Raw Items Array List to match standard inner model formats
         List<com.raghunath.hotelview.dto.admin.OrderItem> inlineItems = new ArrayList<>();
-
-        // Use the exact setter or builder pattern that your OrderItem class provides
         inlineItems.add(com.raghunath.hotelview.dto.admin.OrderItem.builder()
                 .itemName(request.getItemName())
                 .quantity(request.getQuantity() != null ? String.valueOf(request.getQuantity()) : "1")
-                .price(0.0) // Kept at zero or null per requirement
+                .price(0.0)
                 .subTotal(grandTotal)
                 .build());
 
-        // 4. Construct Nested KitchenOrder Object Structure matching standard schema exactly
+        // 4. Construct Nested KitchenOrder Object Structure
         KitchenOrder mockOrder = KitchenOrder.builder()
                 .id(new org.bson.types.ObjectId().toString())
                 .hotelId(hotelId)
@@ -822,10 +874,31 @@ public class OrderService {
                 .updatedAt(mockOrder.getUpdatedAt())
                 .createdDate(mockOrder.getCreatedDate())
                 .createdTime(mockOrder.getCreatedTime())
-                // Omit hotelId, tableName, and orderType from the snapshot structure perfectly!
                 .build());
 
-        // 5. Build and Save Completed Order
+        // 5. Prepare Response Items & Process Tax Calculation
+        int parsedQuantity = 1;
+        try {
+            parsedQuantity = Integer.parseInt(mockOrder.getItems().get(0).getQuantity());
+        } catch (NumberFormatException e) {
+            if (request.getQuantity() != null) {
+                parsedQuantity = request.getQuantity();
+            }
+        }
+
+        List<CheckoutResponse.BillItem> responseItems = new ArrayList<>();
+        responseItems.add(CheckoutResponse.BillItem.builder()
+                .itemName(request.getItemName())
+                .quantity(String.valueOf(parsedQuantity))
+                .price(grandTotal)
+                .subTotal(grandTotal)
+                .build());
+
+        // 🌟 TAX ENGINE CALCULATION (Must be executed before building CompletedOrder and CheckoutResponse)
+        TaxCalculationContext taxCtx = processTaxAndTotals(hotelId, mockOrder.getOrderType(), grandTotal, discountAmount, responseItems);
+        Double totalPayable = taxCtx.totalPayable();
+
+        // 6. Build and Save Completed Order
         CompletedOrder finalBill = CompletedOrder.builder()
                 .hotelId(hotelId)
                 .orderType(mockOrder.getOrderType())
@@ -839,6 +912,7 @@ public class OrderService {
                 .discountPercent(discountPercent)
                 .discountAmount(discountAmount)
                 .totalPayable(totalPayable)
+                .gsttype(taxCtx.gstTypeList()) // 🌟 Saved tax breakdown array
                 .checkoutBy(checkoutBy)
                 .checkoutDate(currentDateStr)
                 .checkoutTime(currentTimeStr)
@@ -846,7 +920,7 @@ public class OrderService {
 
         CompletedOrder savedBill = completeOrderRepository.save(finalBill);
 
-        // 6. Cleanup and Sync
+        // 7. Cleanup and Sync
         if (savedBill.getId() != null) {
             syncCustomerDetails(hotelId, finalBill);
             if (org.springframework.util.StringUtils.hasText(request.getTableName())) {
@@ -854,29 +928,14 @@ public class OrderService {
             }
         }
 
-        // 7. Build Uniform Response Object
+        // 8. Build Uniform Response Object
         String fullId = savedBill.getId();
         String shortId = (fullId != null && fullId.length() > 6) ? fullId.substring(fullId.length() - 6) : fullId;
 
-        // Convert string quantity safely into integer to prevent type conversion errors during response building
-        int parsedQuantity = 1;
-        try {
-            parsedQuantity = Integer.parseInt(mockOrder.getItems().get(0).getQuantity());
-        } catch (NumberFormatException e) {
-            // Fallback safety parameter if a dirty string passes through
-            if (request.getQuantity() != null) {
-                parsedQuantity = request.getQuantity();
-            }
-        }
+        updateDailyAnalytics(hotelId, checkoutBy, totalPayable, null, false, taxCtx.gstTypeList());
 
-        List<CheckoutResponse.BillItem> responseItems = new ArrayList<>();
-        responseItems.add(CheckoutResponse.BillItem.builder()
-                .itemName(request.getItemName())
-                .quantity(String.valueOf(parsedQuantity)) // ✔️ Cleanly casted primitive int value applied here
-                .price(grandTotal)
-                .build());
-
-        updateDailyAnalytics(hotelId, checkoutBy, totalPayable, null, false);
+        // 🌟 RESOLVE GST NUMBER BASED ON RECEIPT SETTINGS
+        String gstNo = resolveGstNumber(taxCtx.receiptSettings(), admin);
 
         return CheckoutResponse.builder()
                 .id(fullId)
@@ -891,8 +950,10 @@ public class OrderService {
                 .items(responseItems)
                 .grandTotal(grandTotal)
                 .totalPayable(totalPayable)
-                .discountPercent(discountPercent) // 🌟 FIXED: Added missing field
+                .discountPercent(discountPercent)
                 .discountAmount(discountAmount)
+                .gsttype(taxCtx.gstTypeList())
+                .restaurantGstNo(gstNo) // 🌟 Included resolved GST number
                 .restaurantName(admin.getRestaurantName())
                 .restaurantAddress(admin.getRestaurantAddress())
                 .restaurantContact(admin.getRestaurantContact())
@@ -901,23 +962,178 @@ public class OrderService {
                 .build();
     }
 
-    private void updateDailyAnalytics(String hotelId, String checkoutBy, Double totalPayable, List<OrderItem> items, boolean trackItems) {
+    /**
+     * 🌟 CENTRAL TAX ENGINE:
+     * Calculates tax amounts based on Receipt Settings (Item-Level vs Business-Level GST)
+     * and applies taxes on the discounted net base.
+     */
+    private TaxCalculationContext processTaxAndTotals(String hotelId, String orderType, Double grandTotal, Double discountAmount, List<CheckoutResponse.BillItem> billItems) {
+        String receiptType = ("TABLE".equalsIgnoreCase(orderType) || "HOME".equalsIgnoreCase(orderType) || "PARCEL".equalsIgnoreCase(orderType))
+                ? "TABLE_HOME" : "INSTANT";
+
+        // 1. Query saved receipt settings
+        Query settingsQuery = new Query(
+                Criteria.where("hotelId").is(hotelId)
+                        .and("receiptType").regex("^" + java.util.regex.Pattern.quote(receiptType) + "$", "i")
+        );
+
+        ReceiptSettings settings = mongoTemplate.findOne(settingsQuery, ReceiptSettings.class, "receipt_settings");
+
+        if (settings == null) {
+            settings = mongoTemplate.findOne(settingsQuery, ReceiptSettings.class);
+        }
+
+        Admin admin = adminRepository.findByHotelId(hotelId).orElse(null);
+
+        List<Map<String, Object>> gstTypeList = new ArrayList<>();
+        double calculatedTotalTax = 0.0;
+        double safeDiscountAmount = (discountAmount != null) ? discountAmount : 0.0;
+        double netDiscountedBase = Math.max(0.0, grandTotal - safeDiscountAmount);
+
+        boolean isItemLevel = settings != null && settings.isApplyItemLevelGst();
+
+        if (isItemLevel) {
+            // ==========================================
+            // 1. ITEM-LEVEL GST CALCULATION
+            // ==========================================
+            double totalItemLevelTax = 0.0;
+            double discountRatio = (grandTotal > 0) ? (netDiscountedBase / grandTotal) : 1.0;
+
+            for (CheckoutResponse.BillItem item : billItems) {
+                double grossLineSubtotal = item.getPreSubTotal() != null ? item.getPreSubTotal() : (item.getSubTotal() != null ? item.getSubTotal() : 0.0);
+                item.setPreSubTotal(grossLineSubtotal);
+
+                double netTaxableLineSubtotal = grossLineSubtotal * discountRatio;
+
+                com.raghunath.hotelview.entity.MenuItem menuItem = null;
+                List<com.raghunath.hotelview.entity.MenuItem> dbItems = mongoTemplate.find(
+                        new Query(Criteria.where("hotelId").is(hotelId)
+                                .and("name").regex("^" + java.util.regex.Pattern.quote(item.getItemName()) + "$", "i")),
+                        com.raghunath.hotelview.entity.MenuItem.class,
+                        "menu_items"
+                );
+
+                if (!dbItems.isEmpty()) {
+                    menuItem = dbItems.get(0);
+                }
+
+                Double itemGstPercent = (menuItem != null && menuItem.getGstPercent() != null) ? menuItem.getGstPercent() : 0.0;
+
+                if (itemGstPercent > 0) {
+                    double itemTaxAmount = netTaxableLineSubtotal * (itemGstPercent / 100.0);
+                    totalItemLevelTax += itemTaxAmount;
+
+                    item.setGst(String.format("%.0f%%", itemGstPercent));
+                    item.setSubTotal(Math.round((netTaxableLineSubtotal + itemTaxAmount) * 100.0) / 100.0);
+                } else {
+                    item.setGst(null);
+                    item.setSubTotal(Math.round(netTaxableLineSubtotal * 100.0) / 100.0);
+                }
+            }
+
+            calculatedTotalTax = totalItemLevelTax;
+            if (totalItemLevelTax > 0) {
+                Map<String, Object> itemTaxMap = new LinkedHashMap<>();
+                itemTaxMap.put("taxType", "itemlevel");
+                itemTaxMap.put("amount", Math.round(totalItemLevelTax * 100.0) / 100.0);
+                gstTypeList.add(itemTaxMap);
+            }
+
+        } else {
+            // ==========================================
+            // 2. BUSINESS-LEVEL GST CALCULATION (CGST, SGST, etc.)
+            // ==========================================
+            for (CheckoutResponse.BillItem item : billItems) {
+                double grossLineSubtotal = item.getPreSubTotal() != null ? item.getPreSubTotal() : (item.getSubTotal() != null ? item.getSubTotal() : 0.0);
+                item.setPreSubTotal(grossLineSubtotal);
+                item.setSubTotal(grossLineSubtotal);
+                item.setGst(null);
+            }
+
+            if (settings != null && settings.getGstDetails() != null && !settings.getGstDetails().isEmpty()) {
+                for (com.raghunath.hotelview.dto.ReceiptGstToggleDTO gstToggle : settings.getGstDetails()) {
+                    if (Boolean.TRUE.equals(gstToggle.isEnabled()) && gstToggle.getGstPercent() != null && gstToggle.getGstPercent() > 0) {
+                        double taxForComponent = netDiscountedBase * (gstToggle.getGstPercent() / 100.0);
+                        calculatedTotalTax += taxForComponent;
+
+                        String label = gstToggle.getGstType() != null ? gstToggle.getGstType().toLowerCase().trim() : "gst";
+                        double roundedTax = Math.round(taxForComponent * 100.0) / 100.0;
+
+                        // 🌟 Map containing explicit percent and amount fields
+                        Map<String, Object> taxMap = new LinkedHashMap<>();
+                        taxMap.put(label + "Percent", gstToggle.getGstPercent());
+                        taxMap.put(label + "Amount", roundedTax);
+                        gstTypeList.add(taxMap);
+                    }
+                }
+            } else if (admin != null && admin.getGstDetails() != null) {
+                for (com.raghunath.hotelview.dto.admin.GstDetailDTO adminGst : admin.getGstDetails()) {
+                    if (adminGst != null && adminGst.getGstPercent() != null && adminGst.getGstPercent() > 0) {
+                        double taxForComponent = netDiscountedBase * (adminGst.getGstPercent() / 100.0);
+                        calculatedTotalTax += taxForComponent;
+
+                        String label = adminGst.getGstType() != null ? adminGst.getGstType().toLowerCase().trim() : "gst";
+                        double roundedTax = Math.round(taxForComponent * 100.0) / 100.0;
+
+                        // 🌟 Map containing explicit percent and amount fields
+                        Map<String, Object> taxMap = new LinkedHashMap<>();
+                        taxMap.put(label + "Percent", adminGst.getGstPercent());
+                        taxMap.put(label + "Amount", roundedTax);
+                        gstTypeList.add(taxMap);
+                    }
+                }
+            }
+        }
+
+        double finalTotalPayable = Math.round((netDiscountedBase + calculatedTotalTax) * 100.0) / 100.0;
+
+        return new TaxCalculationContext(gstTypeList, finalTotalPayable, settings);
+    }
+
+    // 🌟 Ensure TaxCalculationContext record definition matches List<Map<String, Object>>
+    private record TaxCalculationContext(
+            List<Map<String, Object>> gstTypeList,
+            double totalPayable,
+            ReceiptSettings receiptSettings
+    ) {}
+
+    private void updateDailyAnalytics(String hotelId, String checkoutBy, Double totalPayable, List<OrderItem> items, boolean trackItems, List<Map<String, Object>> gstTypeList) {
         try {
             if (totalPayable == null || totalPayable <= 0) return;
 
             ZonedDateTime nowIST = getISTNow();
-            String todayStr = nowIST.format(DateTimeFormatter.ISO_LOCAL_DATE); // Format: "YYYY-MM-DD"
+            String todayStr = nowIST.format(DateTimeFormatter.ISO_LOCAL_DATE);
 
-            // =========================================================================
-            // 1. UPDATE STAFF COLLECTION SUMMARY
-            // =========================================================================
+            Map<String, Double> taxBreakdown = new HashMap<>();
+            double totalTaxSum = 0.0;
+
+            if (gstTypeList != null && !gstTypeList.isEmpty()) {
+                for (Map<String, Object> gstMap : gstTypeList) {
+                    if (gstMap != null) {
+                        for (Map.Entry<String, Object> entry : gstMap.entrySet()) {
+                            if (entry.getKey() != null && entry.getValue() != null) {
+                                try {
+                                    String taxKey = entry.getKey().toLowerCase().trim();
+                                    double val = Double.parseDouble(String.valueOf(entry.getValue()));
+
+                                    if (val > 0 && !taxKey.contains("percent")) {
+                                        String cleanKey = taxKey.replace("amount", "").trim();
+                                        taxBreakdown.merge(cleanKey, val, Double::sum);
+                                        totalTaxSum += val;
+                                    }
+                                } catch (NumberFormatException ignored) {}
+                            }
+                        }
+                    }
+                }
+            }
+            totalTaxSum = Math.round(totalTaxSum * 100.0) / 100.0;
+
             String staffDocId = hotelId + "_" + todayStr + "_STAFF";
 
-            // Resolve Staff / Employee Identifier details
             String staffIdentifier = checkoutBy != null ? checkoutBy : "SYSTEM";
             String staffDisplayName = staffIdentifier;
 
-            // Try resolving staff name/ID via Employee collection lookup
             Optional<Employee> empOpt = mongoTemplate.find(
                     new Query(Criteria.where("hotelId").is(hotelId).and("username").is(staffIdentifier)),
                     Employee.class,
@@ -930,41 +1146,51 @@ public class OrderService {
                 staffDisplayName = emp.getName() != null ? emp.getName() : emp.getUsername();
             }
 
-            // A. Atomic update: Try to increment existing staff member entry in the array
-            Query staffArrayMatchQuery = new Query(Criteria.where("_id").is(staffDocId).and("staff.staffId").is(staffIdentifier));
-            Update incExistingStaff = new Update()
+            Update staffUpdate = new Update()
                     .inc("totalCollection", totalPayable)
-                    .inc("staff.$.amount", totalPayable);
+                    .inc("totaltaxcollected", totalTaxSum);
 
-            UpdateResult staffUpdateResult = mongoTemplate.updateFirst(staffArrayMatchQuery, incExistingStaff, "daily_staff_summary");
+            for (Map.Entry<String, Double> entry : taxBreakdown.entrySet()) {
+                double roundedTax = Math.round(entry.getValue() * 100.0) / 100.0;
+                staffUpdate.inc("gstBreakdown." + entry.getKey(), roundedTax);
+                staffUpdate.inc("staff.$.gstBreakdown." + entry.getKey(), roundedTax);
+            }
 
-            // B. If staff does not exist in array yet, push them into array (or create daily doc if 1st order)
+            Query staffArrayMatchQuery = new Query(Criteria.where("_id").is(staffDocId).and("staff.staffId").is(staffIdentifier));
+            staffUpdate.inc("staff.$.amount", totalPayable)
+                    .inc("staff.$.taxcollected", totalTaxSum);
+
+            UpdateResult staffUpdateResult = mongoTemplate.updateFirst(staffArrayMatchQuery, staffUpdate, "daily_staff_summary");
+
             if (staffUpdateResult.getMatchedCount() == 0) {
                 Query baseStaffDocQuery = new Query(Criteria.where("_id").is(staffDocId));
 
-                // Build raw Document to match your requested structure exactly
+                org.bson.Document initialGstBreakdown = new org.bson.Document();
+                taxBreakdown.forEach((k, v) -> initialGstBreakdown.append(k, Math.round(v * 100.0) / 100.0));
+
                 org.bson.Document newStaffElement = new org.bson.Document()
                         .append("staffId", staffIdentifier)
                         .append("name", staffDisplayName)
-                        .append("amount", totalPayable);
+                        .append("amount", totalPayable)
+                        .append("taxcollected", totalTaxSum)
+                        .append("gstBreakdown", initialGstBreakdown);
 
                 Update pushNewStaff = new Update()
                         .setOnInsert("restaurantId", hotelId)
                         .setOnInsert("date", todayStr)
                         .inc("totalCollection", totalPayable)
+                        .inc("totaltaxcollected", totalTaxSum)
                         .push("staff", newStaffElement);
+
+                taxBreakdown.forEach((k, v) -> pushNewStaff.inc("gstBreakdown." + k, Math.round(v * 100.0) / 100.0));
 
                 mongoTemplate.upsert(baseStaffDocQuery, pushNewStaff, "daily_staff_summary");
             }
 
-            // =========================================================================
-            // 2. UPDATE ITEM SALES SUMMARY (Skipped for custom/direct orders)
-            // =========================================================================
             if (trackItems && items != null && !items.isEmpty()) {
                 String itemDocId = hotelId + "_" + todayStr + "_ITEMS";
 
                 for (OrderItem item : items) {
-                    // Filter out Custom items: Only process items that have a valid DB itemId
                     if (item.getItemId() == null || item.getItemId().trim().isEmpty()) {
                         continue;
                     }
@@ -973,7 +1199,6 @@ public class OrderService {
                     String rawItemName = item.getItemName() != null ? item.getItemName().trim() : "Unknown Item";
                     String unitStr = item.getUnit() != null ? item.getUnit().trim() : "PIECE";
 
-                    // Parse quantity safely (handles "2", "2.0", "1 Litre", etc.)
                     double numericQty = 1.0;
                     if (item.getQuantity() != null) {
                         try {
@@ -984,7 +1209,6 @@ public class OrderService {
                         } catch (Exception ignored) {}
                     }
 
-                    // A. Atomic update: Try to increment existing item entry in the array
                     Query itemArrayMatchQuery = new Query(Criteria.where("_id").is(itemDocId).and("items.itemId").is(itemId));
                     Update incExistingItem = new Update()
                             .inc("totalQtySold", numericQty)
@@ -992,7 +1216,6 @@ public class OrderService {
 
                     UpdateResult itemUpdateResult = mongoTemplate.updateFirst(itemArrayMatchQuery, incExistingItem, "daily_item_summary");
 
-                    // B. If item does not exist in array yet, push it into array
                     if (itemUpdateResult.getMatchedCount() == 0) {
                         Query baseItemDocQuery = new Query(Criteria.where("_id").is(itemDocId));
 
@@ -1151,7 +1374,9 @@ public class OrderService {
                 try {
                     // Targeting by the unique Object ID is faster and protects against name duplicate collisions completely
                     Query query = new Query(Criteria.where("_id").is(menuItem.getId()));
-                    Update update = new Update().inc("totalQuantity", -finalDeduction);
+                    Update update = new Update()
+                            .inc("totalQuantity", -finalDeduction)
+                            .set("updatedAt", LocalDateTime.now());
 
                     mongoTemplate.updateFirst(query, update, com.raghunath.hotelview.entity.MenuItem.class);
                     log.info("INVENTORY_LOG: Atomic deduction forced for '{}': -{}", menuItem.getName(), finalDeduction);

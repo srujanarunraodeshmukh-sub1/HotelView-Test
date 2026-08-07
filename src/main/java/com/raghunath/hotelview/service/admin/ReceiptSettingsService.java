@@ -60,6 +60,7 @@ public class ReceiptSettingsService {
 
         // 🌟 Save GST Number Print Toggle
         settings.setPrintGstNumber(dto.isPrintGstNumber());
+        settings.setApplyItemLevelGst(dto.isApplyItemLevelGst());
 
         settings.setGstDetails(dto.getGstDetails());
 
@@ -84,7 +85,9 @@ public class ReceiptSettingsService {
                 .printUpiAndQr(entity.isPrintUpiAndQr())
                 .printGreetingNote(entity.isPrintGreetingNote())
                 .printItemQuantities(entity.isPrintItemQuantities())
-                .printGstNumber(entity.isPrintGstNumber()) // 🌟 Map GST Number print switch
+                .printGstNumber(entity.isPrintGstNumber())
+                .printGstNumber(entity.isPrintGstNumber())
+                .applyItemLevelGst(entity.isApplyItemLevelGst())
                 .gstDetails(syncedGstDetails)
                 .build();
     }
@@ -95,6 +98,9 @@ public class ReceiptSettingsService {
         // Check if admin has configured a GST number in Business Details to set default true/false
         Admin admin = adminRepository.findByHotelId(hotelId).orElse(null);
         boolean defaultPrintGst = admin != null && admin.getGstNumber() != null && !admin.getGstNumber().trim().isEmpty();
+
+        boolean defaultApplyBusinessGst = initialGstToggles != null && !initialGstToggles.isEmpty();
+        boolean defaultApplyItemLevelGst = false;
 
         if ("TABLE_HOME".equalsIgnoreCase(receiptType)) {
             return ReceiptSettingsDTO.builder()
@@ -109,7 +115,8 @@ public class ReceiptSettingsService {
                     .printUpiAndQr(true)
                     .printGreetingNote(true)
                     .printItemQuantities(true)
-                    .printGstNumber(defaultPrintGst) // 🌟 Default true if GST number exists
+                    .printGstNumber(defaultPrintGst)
+                    .applyItemLevelGst(defaultApplyItemLevelGst)
                     .gstDetails(initialGstToggles)
                     .build();
         } else { // Fallback targets "INSTANT" configuration defaults directly

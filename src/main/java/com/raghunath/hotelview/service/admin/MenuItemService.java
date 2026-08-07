@@ -55,6 +55,7 @@ public class MenuItemService {
                 .lastAddedStock(request.getTotalQuantity())
                 .totalquantityUnit(request.getTotalquantityUnit())
                 .unit(request.getUnit() != null ? request.getUnit().toUpperCase() : "PIECE") // 🌟 Map Unit Matrix
+                .gstPercent(request.getGstPercent() != null ? request.getGstPercent() : 0.0)
                 .createdAt(now)
                 .updatedAt(now)
                 .isApproved(true)
@@ -110,6 +111,7 @@ public class MenuItemService {
         existingItem.setLastAddedStock(dto.getTotalQuantity());
         existingItem.setTotalquantityUnit(dto.getTotalquantityUnit());
         existingItem.setUnit(dto.getUnit() != null ? dto.getUnit().toUpperCase() : existingItem.getUnit());
+        existingItem.setGstPercent(dto.getGstPercent() != null ? dto.getGstPercent() : existingItem.getGstPercent());
 
         existingItem.setUpdatedAt(LocalDateTime.now());
 
@@ -214,6 +216,7 @@ public class MenuItemService {
                 .totalquantityUnit(item.getTotalquantityUnit())
                 .lastAddedStock(item.getLastAddedStock())
                 .unit(item.getUnit())
+                .gstPercent(item.getGstPercent() != null ? item.getGstPercent() : 0.0)
                 .build();
     }
 

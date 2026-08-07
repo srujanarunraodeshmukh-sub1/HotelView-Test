@@ -31,6 +31,7 @@ public class ReceiptSettings {
     private boolean printGreetingNote;
 
     private boolean printGstNumber;
+    private boolean applyItemLevelGst;
     private List<ReceiptGstToggleDTO> gstDetails;
     private boolean printItemQuantities;
 }

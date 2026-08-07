@@ -36,4 +36,5 @@ public class MenuItemUpdateDTO {
     private Boolean isAvailable;
     private String imageUrl;
     private Integer preparationTime;
+    private Double gstPercent;
 }

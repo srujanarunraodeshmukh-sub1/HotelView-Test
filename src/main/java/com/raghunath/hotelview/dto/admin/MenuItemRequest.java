@@ -36,4 +36,6 @@ public class MenuItemRequest {
 
     private Integer preparationTime;
 
+    private Double gstPercent;
+
 }

@@ -22,4 +22,5 @@ public class MenuItemSummaryDTO {
     private Boolean isVeg;
     private Boolean isAvailable;
     private String imageUrl;
+    private Double gstPercent;
 }
