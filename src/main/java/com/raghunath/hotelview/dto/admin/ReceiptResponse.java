@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 @Data
 @Builder
@@ -14,6 +15,8 @@ public class ReceiptResponse {
     private String restaurantContact;
     private String restaurantLogo;
     private String restaurantUpi;
+
+    private String restaurantGstNo;
 
 
     // Order Data
@@ -30,6 +33,8 @@ public class ReceiptResponse {
     private Double totalPayable;    // The final amount after discount (e.g., 900)
     // -------------------------------
 
+    private List<Map<String, Object>> gsttype;
+
     // Customer Info
     private String customerName;
     private String customerMobile;
@@ -41,7 +46,9 @@ public class ReceiptResponse {
         private String itemName;
         private String quantity;
         private Double price;
+        private Double preSubTotal;
         private Double subTotal;
         private String unit;
+        private String gst;
     }
 }

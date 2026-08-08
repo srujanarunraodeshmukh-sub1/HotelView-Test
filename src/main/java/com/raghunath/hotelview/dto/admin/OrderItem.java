@@ -34,6 +34,10 @@ public class OrderItem {
     @Min(value = 0, message = "Subtotal cannot be negative")
     private Double subTotal;
 
+    private Double preSubTotal;
+
+    private String gst;
+
     // 🚀 Cleaned up getter to return the submitted frontend subtotal calculation safely
     public Double getSubTotal() {
         return this.subTotal != null ? this.subTotal : 0.0;

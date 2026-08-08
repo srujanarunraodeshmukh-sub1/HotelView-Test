@@ -178,47 +178,74 @@ public class CompletedOrderService {
         Admin admin = adminRepository.findByHotelId(hotelIdFromToken)
                 .orElseThrow(() -> new RuntimeException("Restaurant profile not found"));
 
-        // 3. Extract items and units straight out of the document in memory
+        // 3. Fetch Receipt Settings based on Order Type
+        String receiptType = ("TABLE".equalsIgnoreCase(order.getOrderType())
+                || "HOME".equalsIgnoreCase(order.getOrderType())
+                || "PARCEL".equalsIgnoreCase(order.getOrderType()))
+                ? "TABLE_HOME" : "INSTANT";
+
+        Query settingsQuery = new Query(
+                Criteria.where("hotelId").is(hotelIdFromToken)
+                        .and("receiptType").regex("^" + java.util.regex.Pattern.quote(receiptType) + "$", "i")
+        );
+
+        ReceiptSettings settings = mongoTemplate.findOne(settingsQuery, ReceiptSettings.class, "receipt_settings");
+        if (settings == null) {
+            settings = mongoTemplate.findOne(settingsQuery, ReceiptSettings.class);
+        }
+
+        // 4. Resolve Restaurant GST Number based on settings toggle
+        String gstNo = resolveGstNumber(settings, admin);
+
+        // 5. Extract items and units
         List<ReceiptResponse.FlattenedItem> flattenedItems = new ArrayList<>();
         if (order.getAllOrders() != null) {
             for (KitchenOrderSnapshot kitchenOrder : order.getAllOrders()) {
                 if (kitchenOrder == null || kitchenOrder.getItems() == null) continue;
 
                 for (OrderItem item : kitchenOrder.getItems()) {
-                    // Clean trailing noise out of name strings safely inline
                     String rawName = item.getItemName() != null ? item.getItemName().trim() : "Unknown Item";
                     rawName = rawName.contains("//") ? rawName.split("//")[0].trim() : rawName;
 
-                    // Clean trailing noise out of quantity strings safely inline
                     String rawQuantity = item.getQuantity() != null ? item.getQuantity().trim() : "1";
                     rawQuantity = rawQuantity.contains("//") ? rawQuantity.split("//")[0].trim() : rawQuantity;
 
-                    // Directly read the stored unit from the CompletedOrder document snapshot
                     String unit = item.getUnit() != null ? item.getUnit().trim() : "PIECE";
                     unit = unit.contains("//") ? unit.split("//")[0].trim() : unit;
                     if (unit.isEmpty()) {
                         unit = "PIECE";
                     }
 
-                    // 🌟 Populate item name and unit as completely independent properties
+                    Double calculatedPreSubTotal = item.getPreSubTotal() != null
+                            ? item.getPreSubTotal()
+                            : (item.getSubTotal() != null ? item.getSubTotal() : 0.0);
+
                     flattenedItems.add(ReceiptResponse.FlattenedItem.builder()
-                            .itemName(rawName)      // Cleaned standalone item name (e.g. "Buttermilk")
-                            .unit(unit)             // Cleaned standalone unit (e.g. "LITER")
+                            .itemName(rawName)
+                            .unit(unit)
                             .quantity(rawQuantity)
                             .price(item.getPrice())
+                            .preSubTotal(calculatedPreSubTotal)
                             .subTotal(item.getSubTotal())
+                            .gst(item.getGst()) // 🌟 Included item-level GST
                             .build());
                 }
             }
         }
 
-        // 4. Return response payload matching your exact schema layout
+        // 6. Build response respecting receipt settings toggles
+        boolean printName = settings == null || settings.isPrintRestaurantName();
+        boolean printAddress = settings == null || settings.isPrintBusinessAddress();
+        boolean printUpi = settings == null || settings.isPrintUpiAndQr();
+        boolean printLogo = settings == null || settings.isIncludeRestaurantLogo();
+
         return ReceiptResponse.builder()
-                .restaurantName(admin.getRestaurantName())
-                .restaurantAddress(admin.getRestaurantAddress())
+                .restaurantName(printName ? admin.getRestaurantName() : null)
+                .restaurantAddress(printAddress ? admin.getRestaurantAddress() : null)
                 .restaurantContact(admin.getRestaurantContact())
-                .restaurantLogo(admin.getRestaurantLogo())
-                .restaurantUpi(admin.getRestaurantUpi())
+                .restaurantLogo(printLogo ? admin.getRestaurantLogo() : null)
+                .restaurantUpi(printUpi ? admin.getRestaurantUpi() : null)
+                .restaurantGstNo(gstNo) // 🌟 Added GST Number
                 .orderId(order.getId())
                 .date(order.getCheckoutDate())
                 .time(order.getCheckoutTime())
@@ -228,10 +255,24 @@ public class CompletedOrderService {
                 .discountPercent(order.getDiscountPercent())
                 .discountAmount(order.getDiscountAmount())
                 .totalPayable(order.getTotalPayable())
+                .gsttype(order.getGsttype() != null ? order.getGsttype() : Collections.emptyList()) // 🌟 Added Global GST details
                 .customerName(order.getCustomerName())
                 .customerMobile(order.getCustomerMobile())
                 .customerAddress(order.getCustomerAddress())
                 .build();
+    }
+
+    private String resolveGstNumber(ReceiptSettings settings, Admin admin) {
+        if (settings != null && Boolean.FALSE.equals(settings.isPrintGstNumber())) {
+            return null;
+        }
+        if (admin == null) {
+            return null;
+        }
+        if (StringUtils.hasText(admin.getGstNumber())) {
+            return admin.getGstNumber().trim();
+        }
+        return null;
     }
 
     public List<CompletedOrder> searchCompletedOrders(String hotelId, String query) {
