@@ -472,23 +472,21 @@ public class CompletedOrderService {
     })
     @Transactional
     public void editCompletedOrderDetails(String hotelId, String orderId, CompletedOrderEditDTO editDto) {
-        System.out.println("[DEBUG START] Hitting editCompletedOrderDetails for orderId: " + orderId);
+        log.info("[EDIT_ORDER] Hitting editCompletedOrderDetails for orderId: {}", orderId);
 
         // 1. Fetch original order from DB
         CompletedOrder order = completeOrderRepository.findById(orderId)
                 .orElseThrow(() -> new RuntimeException("Completed order record not found"));
 
-        System.out.println("[DEBUG] Order fetched successfully. Hotel ID from DB: " + order.getHotelId() + " | Provided Hotel ID: " + hotelId);
-
         if (!order.getHotelId().equals(hotelId)) {
             throw new RuntimeException("Unauthorized action on this resource workspace");
         }
 
+        // 2. Date Timeline Validation (7 Days)
         if (order.getCheckoutDate() != null) {
             try {
                 java.time.LocalDate checkoutDate = java.time.LocalDate.parse(order.getCheckoutDate());
                 java.time.LocalDate todayIST = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
-                System.out.println("[DEBUG] Timeline validation -> Checkout Date: " + checkoutDate + " | Today: " + todayIST);
 
                 if (checkoutDate.plusDays(7).isBefore(todayIST)) {
                     throw new RuntimeException("Modification denied: This completed order is older than 7 days.");
@@ -502,51 +500,28 @@ public class CompletedOrderService {
             throw new RuntimeException("This completed order contains no inner order structural array elements");
         }
 
-        // Print all items that actually exist inside this document before filtering
-        System.out.println("[DEBUG] --- Listing ALL items currently inside the database document ---");
-        order.getAllOrders().stream()
-                .filter(ko -> ko != null && ko.getItems() != null)
-                .flatMap(ko -> ko.getItems().stream())
-                .forEach(item -> System.out.println(" -> Found DB Item Name: '" + item.getItemName() + "' [Length: " + (item.getItemName() != null ? item.getItemName().length() : 0) + "]"));
-        System.out.println("[DEBUG] ---------------------------------------------------------------");
-
-        // 3. MAP NEW QUANTITIES, SUBTOTALS, AND DYNAMICALLY ADJUST INVENTORY
+        // 3. MAP ITEM-LEVEL TAXES, PRICES, SUBTOTALS & ADJUST INVENTORY
         if (editDto.getItems() != null && !editDto.getItems().isEmpty()) {
             for (CompletedOrderEditDTO.UpdatedItemPayload incomingItem : editDto.getItems()) {
 
-                System.out.println("[DEBUG] Processing incoming item payload element -> Name: '" + incomingItem.getItemName() + "'");
-
-                // Sanitize incoming item name inline
                 String incomingNameClean = incomingItem.getItemName() != null ? incomingItem.getItemName().trim() : "";
                 incomingNameClean = incomingNameClean.contains("//") ? incomingNameClean.split("//")[0].trim() : incomingNameClean;
                 String finalIncomingName = incomingNameClean;
 
-                System.out.println("[DEBUG] Sanitized Payload Item Name to match: '" + finalIncomingName + "' [Length: " + finalIncomingName.length() + "]");
-
-                // Scan across every single sub-order array element to locate the live reference object
+                // Locate matching DB Item
                 OrderItem originalDbItem = order.getAllOrders().stream()
                         .filter(ko -> ko != null && ko.getItems() != null)
                         .flatMap(ko -> ko.getItems().stream())
                         .filter(item -> {
                             if (item == null || item.getItemName() == null) return false;
-
-                            // Strip out hidden newlines (\r, \n), spaces, and convert to lowercase
                             String cleanDbName = item.getItemName().replaceAll("[\\r\\n]", "").trim().toLowerCase();
                             String cleanPayloadName = finalIncomingName.replaceAll("[\\r\\n]", "").trim().toLowerCase();
-
-                            boolean matchResult = cleanDbName.equals(cleanPayloadName);
-                            System.out.println("   [FILTER COMPARE] DB Name: '" + cleanDbName + "' vs Payload Name: '" + cleanPayloadName + "' -> Match Status: " + matchResult);
-
-                            return matchResult;
+                            return cleanDbName.equals(cleanPayloadName);
                         })
                         .findFirst()
-                        .orElseThrow(() -> {
-                            System.out.println("[CRITICAL ERROR] Matching failed! Throwing item not found exception.");
-                            return new RuntimeException("Item '" + finalIncomingName + "' does not exist in the original bill. Only modifications are allowed.");
-                        });
+                        .orElseThrow(() -> new RuntimeException("Item '" + finalIncomingName + "' does not exist in the original bill. Only modifications are allowed."));
 
-                System.out.println("[DEBUG] Successfully matched item inside stream! Proceeding to parse metrics for: " + originalDbItem.getItemName());
-
+                // Inventory Adjustment
                 if (incomingItem.getQuantity() != null) {
                     String cleanOldQtyStr = originalDbItem.getQuantity() != null ? originalDbItem.getQuantity().trim().toLowerCase() : "1";
                     cleanOldQtyStr = cleanOldQtyStr.contains("//") ? cleanOldQtyStr.split("//")[0].trim() : cleanOldQtyStr;
@@ -575,9 +550,7 @@ public class CompletedOrderService {
                         throw new RuntimeException("Quantity for '" + originalDbItem.getItemName() + "' cannot be negative.");
                     }
 
-                    // --- INVENTORY STOCK SYNC LOGIC ---
                     String itemUnit = originalDbItem.getUnit() != null ? originalDbItem.getUnit().toUpperCase() : "PIECE";
-
                     double oldCalculatedDeduction = oldNumericValue;
                     double newCalculatedDeduction = newNumericValue;
 
@@ -602,34 +575,47 @@ public class CompletedOrderService {
 
                             Update stockUpdate = new Update().inc("totalQuantity", -inventoryStockAdjustmentDelta);
                             mongoTemplate.updateFirst(stockQuery, stockUpdate, com.raghunath.hotelview.entity.MenuItem.class);
-                            System.out.println("[DEBUG] Stock adjusted for '" + originalDbItem.getItemName() + "' | Shift Balance: " + (-inventoryStockAdjustmentDelta));
                         } catch (Exception e) {
-                            log.error("INVENTORY_EDIT_CRITICAL_ERR: Failed stock adjustment processing for item '{}'", originalDbItem.getItemName(), e);
+                            log.error("INVENTORY_EDIT_CRITICAL_ERR: Failed stock adjustment for item '{}'", originalDbItem.getItemName(), e);
                         }
                     }
 
                     originalDbItem.setQuantity(cleanNewQtyStr);
                 }
 
+                // Price & Subtotal Updates
+                if (incomingItem.getPrice() != null) {
+                    originalDbItem.setPrice(incomingItem.getPrice());
+                }
+                if (incomingItem.getUnit() != null) {
+                    originalDbItem.setUnit(incomingItem.getUnit());
+                }
+                if (incomingItem.getGst() != null) {
+                    originalDbItem.setGst(incomingItem.getGst()); // 🌟 Save/Update item-level GST string
+                }
+                if (incomingItem.getPreSubTotal() != null) {
+                    originalDbItem.setPreSubTotal(incomingItem.getPreSubTotal());
+                } else if (incomingItem.getSubTotal() != null) {
+                    originalDbItem.setPreSubTotal(incomingItem.getSubTotal());
+                }
                 if (incomingItem.getSubTotal() != null) {
                     originalDbItem.setSubTotal(incomingItem.getSubTotal());
                 }
             }
         }
 
-        // 🌟 4. RECALCULATE KITCHEN ORDER TOTAL AMOUNT METRICS FOR EACH INNER BLOCK (Subtotal to totalAmount logic)
+        // 4. RECALCULATE KITCHEN ORDER SNAPSHOT BLOCK TOTALS
         for (KitchenOrderSnapshot subOrder : order.getAllOrders()) {
             if (subOrder != null && subOrder.getItems() != null) {
                 double computedBlockTotal = subOrder.getItems().stream()
                         .filter(java.util.Objects::nonNull)
-                        .mapToDouble(OrderItem::getSubTotal)
+                        .mapToDouble(item -> item.getSubTotal() != null ? item.getSubTotal() : 0.0)
                         .sum();
                 subOrder.setTotalAmount(computedBlockTotal);
-                System.out.println("[DEBUG] Synced KitchenOrder block ID: " + subOrder.getId() + " totalAmount updated to: " + computedBlockTotal);
             }
         }
 
-        // 🌟 5. APPLY TOP-LEVEL FINANCIAL OVERRIDES FROM PAYLOAD
+        // 5. APPLY TOP-LEVEL FINANCIAL & GST OVERRIDES
         if (editDto.getGrandTotal() != null) {
             order.setGrandTotal(editDto.getGrandTotal());
         }
@@ -638,6 +624,11 @@ public class CompletedOrderService {
         }
         if (editDto.getDiscountPercent() != null) {
             order.setDiscountPercent(editDto.getDiscountPercent());
+        }
+
+        // 🌟 SAVE / OVERWRITE GST BREAKDOWN ARRAY
+        if (editDto.getGsttype() != null) {
+            order.setGsttype(editDto.getGsttype());
         }
 
         if (editDto.getCustomTotalPayable() == null) {
@@ -650,19 +641,33 @@ public class CompletedOrderService {
         order.setLastTotalPayable(oldTotalPayable);
         order.setTotalPayable(finalTotalPayable);
 
-        // Save completely transformed data structure back to MongoDB
+        // Save updated order to MongoDB
         completeOrderRepository.save(order);
-        System.out.println("[DEBUG] CompletedOrder record saved to MongoDB database successfully.");
 
-        // 6. Adjust Customer metrics balance
+        // 6. ADJUST CUSTOMER & DAILY STAFF SUMMARY METRICS
         double financialDelta = finalTotalPayable - oldTotalPayable;
-        if (org.springframework.util.StringUtils.hasText(order.getCustomerMobile()) && !"0000000000".equals(order.getCustomerMobile())) {
-            Query query = new Query(Criteria.where("hotelId").is(hotelId).and("customerMobile").is(order.getCustomerMobile()));
-            Update update = new Update().inc("totalAmountPaid", financialDelta);
-            mongoTemplate.updateFirst(query, update, CustomerDetails.class);
+
+        if (financialDelta != 0.0) {
+            if (org.springframework.util.StringUtils.hasText(order.getCustomerMobile()) && !"0000000000".equals(order.getCustomerMobile())) {
+                Query query = new Query(Criteria.where("hotelId").is(hotelId).and("customerMobile").is(order.getCustomerMobile()));
+                Update update = new Update().inc("totalAmountPaid", financialDelta);
+                mongoTemplate.updateFirst(query, update, CustomerDetails.class);
+            }
+
+            try {
+                String targetDate = order.getCheckoutDate() != null ? order.getCheckoutDate() : java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata")).toString();
+                String staffDocId = hotelId + "_" + targetDate + "_STAFF";
+
+                Query staffDocQuery = new Query(Criteria.where("_id").is(staffDocId));
+                Update staffUpdate = new Update().inc("totalCollection", financialDelta);
+
+                mongoTemplate.updateFirst(staffDocQuery, staffUpdate, "daily_staff_summary");
+            } catch (Exception e) {
+                log.error("STAFF_ANALYTICS_DELTA_ERR: Failed updating staff summary for order {}", orderId, e);
+            }
         }
 
-        System.out.println("[DEBUG END] Processing finalized successfully without errors.");
+        log.info("[EDIT_ORDER] CompletedOrder updated successfully for orderId: {}", orderId);
     }
 
     public List<InventoryItemsResponse> getOrderInventoryDetails(String hotelId, String orderId) {
