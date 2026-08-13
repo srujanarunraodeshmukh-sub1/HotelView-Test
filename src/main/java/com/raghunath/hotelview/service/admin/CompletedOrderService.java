@@ -715,6 +715,7 @@ public class CompletedOrderService {
                             .price(String.valueOf(menuItem.getPrice()))
                             .quantity(menuItem.getQuantity())
                             .unit(menuItem.getUnit() != null ? menuItem.getUnit() : menuItem.getTotalquantityUnit())
+                            .gstPercent(menuItem.getGstPercent())
                             .isPresent(true)
                             .build());
                     foundInMenu = true;

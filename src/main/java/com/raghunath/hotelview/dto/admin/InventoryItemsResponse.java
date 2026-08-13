@@ -10,5 +10,6 @@ public class InventoryItemsResponse {
     private String price;
     private String quantity;
     private String unit;
+    private Double gstPercent;
     private Boolean isPresent;
 }

@@ -169,6 +169,7 @@ public class SecurityConfig {
                 "https://hotelview-tau.vercel.app",
                 "http://localhost",
                 "https://localhost",
+                "https://netbill.madhavaglobal.in",
                 "capacitor://localhost",
                 "https://www.madhavaglobal.in",
                 "https://hotel-view-scanner.vercel.app"
