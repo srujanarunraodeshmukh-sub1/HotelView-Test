@@ -27,6 +27,15 @@ import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.util.StringUtils;
 import com.mongodb.client.result.UpdateResult;
 
+import org.bson.Document;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -1595,6 +1604,7 @@ public class OrderService {
 
     /**
      * 10. FETCH TODAY'S SUMMARY DATA
+     * (Automatically returns the updated tax and staff fields)
      */
     public DailySummaryResponse getTodaySummary(String hotelId) {
         String todayStr = getISTNow().format(DateTimeFormatter.ISO_LOCAL_DATE);
@@ -1602,31 +1612,62 @@ public class OrderService {
     }
 
     /**
-     * 11. FETCH DATE-WISE SUMMARY DATA (e.g. "2026-07-29")
+     * 11. FETCH DATE-WISE SUMMARY DATA (e.g. "2026-08-14")
      */
     public DailySummaryResponse getSummaryByDate(String hotelId, String date) {
         String staffDocId = hotelId + "_" + date + "_STAFF";
         String itemDocId = hotelId + "_" + date + "_ITEMS";
 
         // Fetch Staff Collection Document
-        org.bson.Document staffDoc = mongoTemplate.findById(staffDocId, org.bson.Document.class, "daily_staff_summary");
+        Document staffDoc = mongoTemplate.findById(staffDocId, Document.class, "daily_staff_summary");
 
         // Fetch Item Sales Document
-        org.bson.Document itemDoc = mongoTemplate.findById(itemDocId, org.bson.Document.class, "daily_item_summary");
+        Document itemDoc = mongoTemplate.findById(itemDocId, Document.class, "daily_item_summary");
 
-        // Map Staff Summary
+        // Staff Summary & Overall Taxes
+        String docId = null;
         Double totalStaffColl = 0.0;
+        Double totalTaxColl = 0.0;
+        Map<String, Double> rootGstBreakdown = new HashMap<>();
         List<DailySummaryResponse.StaffSummaryDto> staffList = new ArrayList<>();
 
         if (staffDoc != null) {
-            totalStaffColl = staffDoc.getDouble("totalCollection") != null ? staffDoc.getDouble("totalCollection") : 0.0;
-            List<org.bson.Document> rawStaff = staffDoc.getList("staff", org.bson.Document.class);
+            docId = staffDoc.getString("_id");
+            // 1. Root level taxes & collections
+            totalStaffColl = roundTo2Decimals(staffDoc.getDouble("totalCollection"));
+            totalTaxColl = roundTo2Decimals(staffDoc.getDouble("totaltaxcollected"));
+
+            org.bson.Document rawRootGst = (org.bson.Document) staffDoc.get("gstBreakdown");
+            if (rawRootGst != null) {
+                for (Map.Entry<String, Object> entry : rawRootGst.entrySet()) {
+                    if (entry.getValue() instanceof Number) {
+                        rootGstBreakdown.put(entry.getKey(), roundTo2Decimals(((Number) entry.getValue()).doubleValue()));
+                    }
+                }
+            }
+
+            // 2. Read Staff Array with their individual taxes
+            List<Document> rawStaff = staffDoc.getList("staff", Document.class);
             if (rawStaff != null) {
-                staffList = rawStaff.stream().map(d -> DailySummaryResponse.StaffSummaryDto.builder()
-                        .staffId(d.getString("staffId"))
-                        .name(d.getString("name"))
-                        .amount(d.getDouble("amount") != null ? d.getDouble("amount") : 0.0)
-                        .build()).toList();
+                staffList = rawStaff.stream().map(d -> {
+                    Map<String, Double> staffGst = new HashMap<>();
+                    org.bson.Document staffGstDoc = (org.bson.Document) d.get("gstBreakdown");
+                    if (staffGstDoc != null) {
+                        for (Map.Entry<String, Object> entry : staffGstDoc.entrySet()) {
+                            if (entry.getValue() instanceof Number) {
+                                staffGst.put(entry.getKey(), roundTo2Decimals(((Number) entry.getValue()).doubleValue()));
+                            }
+                        }
+                    }
+
+                    return DailySummaryResponse.StaffSummaryDto.builder()
+                            .staffId(d.getString("staffId"))
+                            .name(d.getString("name"))
+                            .amount(roundTo2Decimals(d.getDouble("amount")))
+                            .taxCollected(roundTo2Decimals(d.getDouble("taxcollected")))
+                            .gstBreakdown(staffGst.isEmpty() ? null : staffGst)
+                            .build();
+                }).toList();
             }
         }
 
@@ -1636,7 +1677,7 @@ public class OrderService {
 
         if (itemDoc != null) {
             totalQty = itemDoc.getDouble("totalQtySold") != null ? itemDoc.getDouble("totalQtySold") : 0.0;
-            List<org.bson.Document> rawItems = itemDoc.getList("items", org.bson.Document.class);
+            List<Document> rawItems = itemDoc.getList("items", Document.class);
             if (rawItems != null) {
                 itemList = rawItems.stream().map(d -> DailySummaryResponse.ItemSummaryDto.builder()
                         .itemId(d.getString("itemId"))
@@ -1647,14 +1688,25 @@ public class OrderService {
             }
         }
 
+        // Return the response mapping all requested fields
         return DailySummaryResponse.builder()
+                .id(docId != null ? docId : staffDocId)
                 .date(date)
                 .restaurantId(hotelId)
                 .totalStaffCollection(totalStaffColl)
+                .totalTaxCollected(totalTaxColl)
+                .gstBreakdown(rootGstBreakdown.isEmpty() ? null : rootGstBreakdown)
                 .staffSummary(staffList)
                 .totalQtySold(totalQty)
                 .itemSummary(itemList)
                 .build();
+    }
+
+    private Double roundTo2Decimals(Double value) {
+        if (value == null) return 0.0;
+        return BigDecimal.valueOf(value)
+                .setScale(3, RoundingMode.HALF_UP)
+                .doubleValue();
     }
 
     /**
