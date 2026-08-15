@@ -26,6 +26,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.util.StringUtils;
 import com.mongodb.client.result.UpdateResult;
+import org.bson.types.ObjectId;
 
 import org.bson.Document;
 import java.time.format.DateTimeFormatter;
@@ -1633,7 +1634,6 @@ public class OrderService {
 
         if (staffDoc != null) {
             docId = staffDoc.getString("_id");
-            // 1. Root level taxes & collections
             totalStaffColl = roundTo2Decimals(staffDoc.getDouble("totalCollection"));
             totalTaxColl = roundTo2Decimals(staffDoc.getDouble("totaltaxcollected"));
 
@@ -1646,7 +1646,6 @@ public class OrderService {
                 }
             }
 
-            // 2. Read Staff Array with their individual taxes
             List<Document> rawStaff = staffDoc.getList("staff", Document.class);
             if (rawStaff != null) {
                 staffList = rawStaff.stream().map(d -> {
@@ -1660,9 +1659,43 @@ public class OrderService {
                         }
                     }
 
+                    String staffId = d.getString("staffId");
+                    if (staffId == null || staffId.trim().isEmpty()) {
+                        staffId = d.getString("_id");
+                    }
+
+                    // Always resolve fresh name from database (ignoring embedded d.getString("name"))
+                    String resolvedName = staffId;
+
+                    if (staffId != null && !staffId.trim().isEmpty()) {
+                        // Prepare query key supporting both ObjectId and String formats
+                        Object queryId = ObjectId.isValid(staffId) ? new ObjectId(staffId) : staffId;
+
+                        // 1. Check 'employees' collection
+                        Document empDoc = mongoTemplate.findOne(
+                                new Query(Criteria.where("_id").is(queryId)),
+                                Document.class,
+                                "employees"
+                        );
+
+                        if (empDoc != null && empDoc.getString("name") != null && !empDoc.getString("name").trim().isEmpty()) {
+                            resolvedName = empDoc.getString("name");
+                        } else {
+                            // 2. Fallback: Check 'admins' collection
+                            Document adminDoc = mongoTemplate.findOne(
+                                    new Query(Criteria.where("_id").is(queryId)),
+                                    Document.class,
+                                    "admins"
+                            );
+                            if (adminDoc != null && adminDoc.getString("name") != null && !adminDoc.getString("name").trim().isEmpty()) {
+                                resolvedName = adminDoc.getString("name");
+                            }
+                        }
+                    }
+
                     return DailySummaryResponse.StaffSummaryDto.builder()
-                            .staffId(d.getString("staffId"))
-                            .name(d.getString("name"))
+                            .staffId(staffId)
+                            .name(resolvedName)
                             .amount(roundTo2Decimals(d.getDouble("amount")))
                             .taxCollected(roundTo2Decimals(d.getDouble("taxcollected")))
                             .gstBreakdown(staffGst.isEmpty() ? null : staffGst)
@@ -1688,7 +1721,6 @@ public class OrderService {
             }
         }
 
-        // Return the response mapping all requested fields
         return DailySummaryResponse.builder()
                 .id(docId != null ? docId : staffDocId)
                 .date(date)
@@ -1705,7 +1737,7 @@ public class OrderService {
     private Double roundTo2Decimals(Double value) {
         if (value == null) return 0.0;
         return BigDecimal.valueOf(value)
-                .setScale(3, RoundingMode.HALF_UP)
+                .setScale(2, RoundingMode.HALF_UP)
                 .doubleValue();
     }
 

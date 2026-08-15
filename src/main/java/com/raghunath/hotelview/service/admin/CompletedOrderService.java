@@ -570,11 +570,35 @@ public class CompletedOrderService {
 
                     if (inventoryStockAdjustmentDelta != 0.0) {
                         try {
+                            // 🌟 FIX: clean the DB item name the SAME way it was cleaned during matching above.
+                            // originalDbItem.getItemName() can contain trailing newlines/whitespace or a
+                            // "//code" suffix, which previously caused the regex to match ZERO documents
+                            // in menu_items — updateFirst() silently no-ops on zero matches (no exception),
+                            // which is why totalQuantity never moved.
+                            String cleanDbItemName = originalDbItem.getItemName()
+                                    .replaceAll("[\\r\\n]", "")
+                                    .trim();
+                            cleanDbItemName = cleanDbItemName.contains("//")
+                                    ? cleanDbItemName.split("//")[0].trim()
+                                    : cleanDbItemName;
+
                             Query stockQuery = new Query(Criteria.where("hotelId").is(hotelId)
-                                    .and("name").regex("^" + java.util.regex.Pattern.quote(originalDbItem.getItemName()) + "$", "i"));
+                                    .and("name").regex("^" + java.util.regex.Pattern.quote(cleanDbItemName) + "$", "i"));
 
                             Update stockUpdate = new Update().inc("totalQuantity", -inventoryStockAdjustmentDelta);
-                            mongoTemplate.updateFirst(stockQuery, stockUpdate, com.raghunath.hotelview.entity.MenuItem.class);
+
+                            com.mongodb.client.result.UpdateResult stockResult =
+                                    mongoTemplate.updateFirst(stockQuery, stockUpdate, com.raghunath.hotelview.entity.MenuItem.class);
+
+                            log.info("[EDIT_ORDER] Stock adjust for '{}' (hotelId={}): delta={}, matched={}, modified={}",
+                                    cleanDbItemName, hotelId, inventoryStockAdjustmentDelta,
+                                    stockResult.getMatchedCount(), stockResult.getModifiedCount());
+
+                            if (stockResult.getMatchedCount() == 0) {
+                                log.warn("INVENTORY_EDIT_NO_MATCH: No menu_items document matched name='{}' hotelId='{}'. " +
+                                                "Stock was NOT adjusted. Raw DB item name was: '{}'",
+                                        cleanDbItemName, hotelId, originalDbItem.getItemName());
+                            }
                         } catch (Exception e) {
                             log.error("INVENTORY_EDIT_CRITICAL_ERR: Failed stock adjustment for item '{}'", originalDbItem.getItemName(), e);
                         }
