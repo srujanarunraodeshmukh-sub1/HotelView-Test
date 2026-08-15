@@ -15,6 +15,7 @@ public class CompletedOrderEditDTO {
 
     @Data
     public static class UpdatedItemPayload {
+        private String itemId;
         private String itemName;
         private String quantity;
         private Double price;

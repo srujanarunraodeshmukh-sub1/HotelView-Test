@@ -468,7 +468,9 @@ public class CompletedOrderService {
             @CacheEvict(value = "orderCache", key = "#hotelId + '-today'"),
             @CacheEvict(value = "orderCache", key = "#hotelId + '-week'"),
             @CacheEvict(value = "orderCache", key = "#hotelId + '-month'"),
-            @CacheEvict(value = "orderCache", key = "#hotelId + '-year'")
+            @CacheEvict(value = "orderCache", key = "#hotelId + '-year'"),
+            @CacheEvict(value = "menuSummaryCache", key = "#hotelId"),
+            @CacheEvict(value = "menuCache", key = "#hotelId")
     })
     @Transactional
     public void editCompletedOrderDetails(String hotelId, String orderId, CompletedOrderEditDTO editDto) {
@@ -504,22 +506,38 @@ public class CompletedOrderService {
         if (editDto.getItems() != null && !editDto.getItems().isEmpty()) {
             for (CompletedOrderEditDTO.UpdatedItemPayload incomingItem : editDto.getItems()) {
 
+                String incomingId = incomingItem.getItemId() != null ? incomingItem.getItemId().trim() : "";
+
                 String incomingNameClean = incomingItem.getItemName() != null ? incomingItem.getItemName().trim() : "";
                 incomingNameClean = incomingNameClean.contains("//") ? incomingNameClean.split("//")[0].trim() : incomingNameClean;
                 String finalIncomingName = incomingNameClean;
 
-                // Locate matching DB Item
-                OrderItem originalDbItem = order.getAllOrders().stream()
-                        .filter(ko -> ko != null && ko.getItems() != null)
-                        .flatMap(ko -> ko.getItems().stream())
-                        .filter(item -> {
-                            if (item == null || item.getItemName() == null) return false;
-                            String cleanDbName = item.getItemName().replaceAll("[\\r\\n]", "").trim().toLowerCase();
-                            String cleanPayloadName = finalIncomingName.replaceAll("[\\r\\n]", "").trim().toLowerCase();
-                            return cleanDbName.equals(cleanPayloadName);
-                        })
-                        .findFirst()
-                        .orElseThrow(() -> new RuntimeException("Item '" + finalIncomingName + "' does not exist in the original bill. Only modifications are allowed."));
+                // Locate matching DB Item.
+                // 🌟 PRIMARY: exact match on itemId (Mongo _id of the menu item) when the
+                // frontend supplied one — unambiguous, no cleaning/regex required.
+                // 🌟 FALLBACK: legacy fuzzy name match, kept only for older orders whose
+                // stored line items predate the itemId field.
+                OrderItem originalDbItem;
+                if (org.springframework.util.StringUtils.hasText(incomingId)) {
+                    originalDbItem = order.getAllOrders().stream()
+                            .filter(ko -> ko != null && ko.getItems() != null)
+                            .flatMap(ko -> ko.getItems().stream())
+                            .filter(item -> item != null && incomingId.equals(item.getItemId()))
+                            .findFirst()
+                            .orElseThrow(() -> new RuntimeException("Item with id '" + incomingId + "' does not exist in the original bill. Only modifications are allowed."));
+                } else {
+                    originalDbItem = order.getAllOrders().stream()
+                            .filter(ko -> ko != null && ko.getItems() != null)
+                            .flatMap(ko -> ko.getItems().stream())
+                            .filter(item -> {
+                                if (item == null || item.getItemName() == null) return false;
+                                String cleanDbName = item.getItemName().replaceAll("[\\r\\n]", "").trim().toLowerCase();
+                                String cleanPayloadName = finalIncomingName.replaceAll("[\\r\\n]", "").trim().toLowerCase();
+                                return cleanDbName.equals(cleanPayloadName);
+                            })
+                            .findFirst()
+                            .orElseThrow(() -> new RuntimeException("Item '" + finalIncomingName + "' does not exist in the original bill. Only modifications are allowed."));
+                }
 
                 // Inventory Adjustment
                 if (incomingItem.getQuantity() != null) {
@@ -570,34 +588,42 @@ public class CompletedOrderService {
 
                     if (inventoryStockAdjustmentDelta != 0.0) {
                         try {
-                            // 🌟 FIX: clean the DB item name the SAME way it was cleaned during matching above.
-                            // originalDbItem.getItemName() can contain trailing newlines/whitespace or a
-                            // "//code" suffix, which previously caused the regex to match ZERO documents
-                            // in menu_items — updateFirst() silently no-ops on zero matches (no exception),
-                            // which is why totalQuantity never moved.
-                            String cleanDbItemName = originalDbItem.getItemName()
-                                    .replaceAll("[\\r\\n]", "")
-                                    .trim();
-                            cleanDbItemName = cleanDbItemName.contains("//")
-                                    ? cleanDbItemName.split("//")[0].trim()
-                                    : cleanDbItemName;
+                            Query stockQuery;
+                            String matchDescriptor;
 
-                            Query stockQuery = new Query(Criteria.where("hotelId").is(hotelId)
-                                    .and("name").regex("^" + java.util.regex.Pattern.quote(cleanDbItemName) + "$", "i"));
+                            // 🌟 PRIMARY: match menu_items by its real _id (originalDbItem.getItemId()),
+                            // which is the same itemId captured on the order line at checkout time.
+                            // This is exact — no name cleaning, no regex ambiguity.
+                            if (org.springframework.util.StringUtils.hasText(originalDbItem.getItemId())) {
+                                stockQuery = new Query(Criteria.where("_id").is(originalDbItem.getItemId())
+                                        .and("hotelId").is(hotelId));
+                                matchDescriptor = "itemId=" + originalDbItem.getItemId();
+                            } else {
+                                // 🌟 FALLBACK: legacy name-based match for old orders with no itemId stored.
+                                String cleanDbItemName = originalDbItem.getItemName()
+                                        .replaceAll("[\\r\\n]", "")
+                                        .trim();
+                                cleanDbItemName = cleanDbItemName.contains("//")
+                                        ? cleanDbItemName.split("//")[0].trim()
+                                        : cleanDbItemName;
+
+                                stockQuery = new Query(Criteria.where("hotelId").is(hotelId)
+                                        .and("name").regex("^" + java.util.regex.Pattern.quote(cleanDbItemName) + "$", "i"));
+                                matchDescriptor = "name=" + cleanDbItemName;
+                            }
 
                             Update stockUpdate = new Update().inc("totalQuantity", -inventoryStockAdjustmentDelta);
 
                             com.mongodb.client.result.UpdateResult stockResult =
                                     mongoTemplate.updateFirst(stockQuery, stockUpdate, com.raghunath.hotelview.entity.MenuItem.class);
 
-                            log.info("[EDIT_ORDER] Stock adjust for '{}' (hotelId={}): delta={}, matched={}, modified={}",
-                                    cleanDbItemName, hotelId, inventoryStockAdjustmentDelta,
+                            log.info("[EDIT_ORDER] Stock adjust ({}) hotelId={}: delta={}, matched={}, modified={}",
+                                    matchDescriptor, hotelId, inventoryStockAdjustmentDelta,
                                     stockResult.getMatchedCount(), stockResult.getModifiedCount());
 
                             if (stockResult.getMatchedCount() == 0) {
-                                log.warn("INVENTORY_EDIT_NO_MATCH: No menu_items document matched name='{}' hotelId='{}'. " +
-                                                "Stock was NOT adjusted. Raw DB item name was: '{}'",
-                                        cleanDbItemName, hotelId, originalDbItem.getItemName());
+                                log.warn("INVENTORY_EDIT_NO_MATCH: No menu_items document matched ({}) hotelId='{}'. Stock was NOT adjusted.",
+                                        matchDescriptor, hotelId);
                             }
                         } catch (Exception e) {
                             log.error("INVENTORY_EDIT_CRITICAL_ERR: Failed stock adjustment for item '{}'", originalDbItem.getItemName(), e);
