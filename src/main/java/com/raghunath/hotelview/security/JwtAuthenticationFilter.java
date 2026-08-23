@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager; // 👈 Core memory cache manager
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 @Component
@@ -60,12 +62,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 // Fallback: If cache is empty, assume valid or let refresh endpoint handle it
                 if (isSessionActive == null || isSessionActive) {
                     String role = jwtUtil.extractRole(token);
+                    // 🌟 NEW: pull userType from the JWT claim (embedded at login/register)
+                    // and grant it as a second authority alongside the role. This lets
+                    // SecurityConfig gate endpoints by BOTH role and account type without
+                    // any controller needing to re-query the Admin document.
+                    String userType = jwtUtil.extractUserType(token);
+
+                    List<GrantedAuthority> authorities = new ArrayList<>();
+                    authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                    if (userType != null && !userType.isBlank()) {
+                        authorities.add(new SimpleGrantedAuthority("USERTYPE_" + userType.trim().toUpperCase()));
+                    }
 
                     UsernamePasswordAuthenticationToken authentication =
                             new UsernamePasswordAuthenticationToken(
                                     hotelId,
                                     null,
-                                    List.of(new SimpleGrantedAuthority("ROLE_" + role))
+                                    authorities
                             );
 
                     authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));

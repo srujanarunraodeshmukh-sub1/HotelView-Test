@@ -1,27 +1,34 @@
 package com.raghunath.hotelview.config;
 
 import com.raghunath.hotelview.security.JwtAuthenticationFilter;
-import com.raghunath.hotelview.security.RateLimitingFilter; // 🌟 Imported your new filter
+import com.raghunath.hotelview.security.RateLimitingFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authorization.AuthorityAuthorizationManager;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
+import java.util.Set;
+import java.util.function.Supplier;
 
 @Configuration
 @RequiredArgsConstructor
@@ -30,14 +37,13 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
-    private final RateLimitingFilter rateLimitingFilter; // 🌟 Injected the rate limiting protection filter
+    private final RateLimitingFilter rateLimitingFilter;
 
     @Bean
     public BCryptPasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    // Tells Spring "I handle auth via JWT, stop creating default password"
     @Bean
     public UserDetailsService userDetailsService() {
         return username -> {
@@ -45,15 +51,66 @@ public class SecurityConfig {
         };
     }
 
-    // Exposes AuthenticationManager in case any service needs it
     @Bean
     public AuthenticationManager authenticationManager(
             AuthenticationConfiguration authenticationConfiguration) throws Exception {
         return authenticationConfiguration.getAuthenticationManager();
     }
 
+    /**
+     * 🌟 NEW: builds an AuthorizationManager that requires the caller to hold
+     * AT LEAST ONE of the given roles AND AT LEAST ONE of the given userTypes.
+     * Reads both straight off the authorities granted by JwtAuthenticationFilter
+     * (ROLE_x and USERTYPE_x) — no DB lookup, no dependency on which Admin
+     * entity/repository handled login. This is the single choke point: a
+     * BuyAndSell (or any non-matching) token cannot pass a path guarded this
+     * way, regardless of what any individual controller does or doesn't check.
+     */
+    private AuthorizationManager<RequestAuthorizationContext> requireRoleAndUserType(
+            Set<String> allowedRoles, Set<String> allowedUserTypes) {
+
+        return (Supplier<Authentication> authenticationSupplier, RequestAuthorizationContext context) -> {
+            Authentication authentication = authenticationSupplier.get();
+
+            if (authentication == null || !authentication.isAuthenticated()) {
+                return new AuthorizationDecision(false);
+            }
+
+            boolean roleOk = authentication.getAuthorities().stream()
+                    .anyMatch(a -> allowedRoles.contains(a.getAuthority().replace("ROLE_", "")));
+
+            boolean userTypeOk = authentication.getAuthorities().stream()
+                    .anyMatch(a -> allowedUserTypes.contains(a.getAuthority().replace("USERTYPE_", "")));
+
+            return new AuthorizationDecision(roleOk && userTypeOk);
+        };
+    }
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+
+        // 🌟 Reusable guards for the two account-type groups in play.
+        AuthorizationManager<RequestAuthorizationContext> restaurantOrInstantAdminOrWaiter =
+                requireRoleAndUserType(Set.of("ADMIN", "WAITER"), Set.of("RESTAURANT", "INSTANT"));
+
+        AuthorizationManager<RequestAuthorizationContext> restaurantOnlyAdminOrWaiter =
+                requireRoleAndUserType(Set.of("ADMIN", "WAITER"), Set.of("RESTAURANT"));
+
+        AuthorizationManager<RequestAuthorizationContext> restaurantOnlyWaiterChefAdmin =
+                requireRoleAndUserType(Set.of("WAITER", "CHEF", "ADMIN"), Set.of("RESTAURANT"));
+
+        AuthorizationManager<RequestAuthorizationContext> restaurantOnlyChefAdmin =
+                requireRoleAndUserType(Set.of("CHEF", "ADMIN"), Set.of("RESTAURANT"));
+
+        AuthorizationManager<RequestAuthorizationContext> restaurantOnlyAdminWaiter =
+                requireRoleAndUserType(Set.of("ADMIN", "WAITER"), Set.of("RESTAURANT"));
+
+        AuthorizationManager<RequestAuthorizationContext> restaurantInstantAdminOnly =
+                requireRoleAndUserType(Set.of("ADMIN"), Set.of("RESTAURANT", "INSTANT"));
+
+        AuthorizationManager<RequestAuthorizationContext> restaurantOnlyAdminOnly =
+                requireRoleAndUserType(Set.of("ADMIN"), Set.of("RESTAURANT"));
+
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .csrf(csrf -> csrf.disable())
@@ -65,7 +122,6 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                         .requestMatchers("/api/v1/user/**").permitAll()
                         .requestMatchers("/error").permitAll()
-                        // Lock down full environment diagnostic endpoints completely
                         .requestMatchers(
                                 "/api/v1/admin/login",
                                 "/api/v1/admin/register",
@@ -85,6 +141,9 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/admin/logout", "/api/v1/employees/logout").authenticated()
 
                         // 2. STAFF & USER MANAGEMENT (Admin Only)
+                        // 🌟 These are restaurant/instant staff-management concepts — a
+                        // BuyAndSell or Car account has no "employees" or "tables", so
+                        // gate by userType here too, not just role.
                         .requestMatchers(
                                 "/api/v1/employees/register",
                                 "/api/v1/admin/profile",
@@ -95,27 +154,26 @@ public class SecurityConfig {
                                 "/api/v1/admin/integrations",
                                 "/api/v1/admin/customer/details",
                                 "/api/v1/admin/submit/paymentDetails"
-                        ).hasRole("ADMIN")
+                        ).access(restaurantInstantAdminOnly)
 
-                        // 3. TABLE OPERATIONS (Ordered by Specificity)
-                        // Allow Waiters and Admins to VIEW tables (Your "getMyTables" API)
-                        .requestMatchers(HttpMethod.GET, "/api/v1/tables").hasAnyRole("ADMIN", "WAITER")
+                        // 3. TABLE OPERATIONS — Restaurant only (Instant has no tables)
+                        .requestMatchers(HttpMethod.GET, "/api/v1/tables").access(restaurantOnlyAdminWaiter)
+                        .requestMatchers("/api/v1/tables/transfer/**").access(restaurantOnlyAdminWaiter)
+                        .requestMatchers("/api/v1/tables/**").access(restaurantOnlyAdminOnly)
 
-                        // Allow Waiters and Admins to TRANSFER orders
-                        .requestMatchers("/api/v1/tables/transfer/**").hasAnyRole("ADMIN", "WAITER")
+                        // 4. KITCHEN OPERATIONS — Restaurant only
+                        .requestMatchers(HttpMethod.PUT, "/api/v1/orders/kitchen/*/confirm-edit").access(restaurantOnlyAdminOrWaiter)
+                        .requestMatchers(HttpMethod.GET, "/api/v1/orders/kitchen/**").access(restaurantOnlyWaiterChefAdmin)
+                        .requestMatchers(HttpMethod.PATCH, "/api/v1/orders/kitchen/**").access(restaurantOnlyChefAdmin)
 
-                        // Restrict everything else (Add, Update, Delete) to ADMIN ONLY
-                        .requestMatchers("/api/v1/tables/**").hasRole("ADMIN")
-
-                        // 4. KITCHEN OPERATIONS (Role-Based Methods)
-                        .requestMatchers(HttpMethod.PUT, "/api/v1/orders/kitchen/*/confirm-edit").hasAnyRole("ADMIN", "WAITER")
-                        .requestMatchers(HttpMethod.GET, "/api/v1/orders/kitchen/**").hasAnyRole("WAITER", "CHEF", "ADMIN")
-                        .requestMatchers(HttpMethod.PATCH, "/api/v1/orders/kitchen/**").hasAnyRole("CHEF", "ADMIN")
-
-
-                        // 5. ORDER & SALES OPERATIONS (Admin + Waiter)
-                        .requestMatchers("/api/v1/orders/completed/*/inventory-profiles").hasRole("ADMIN")
-                        .requestMatchers("/api/v1/orders/summary/completed/**").hasRole("ADMIN")
+                        // 5. ORDER & SALES OPERATIONS — Restaurant + Instant only
+                        // 🌟 THIS is the block that closes the gap we were chasing: checkout,
+                        // direct-checkout, instant/checkout, completed orders, dashboard stats,
+                        // etc. now require USERTYPE_RESTAURANT or USERTYPE_INSTANT in addition
+                        // to the role — a BuyAndSell token fails here regardless of which
+                        // Admin entity/repository its login went through.
+                        .requestMatchers("/api/v1/orders/completed/*/inventory-profiles").access(restaurantOnlyAdminOnly)
+                        .requestMatchers("/api/v1/orders/summary/completed/**").access(restaurantOnlyAdminOnly)
                         .requestMatchers(
                                 "/api/v1/orders/draft/**",
                                 "/api/v1/orders/confirm/**",
@@ -130,28 +188,29 @@ public class SecurityConfig {
                                 "/api/v1/orders/completed/delivery/today",
                                 "/api/v1/orders/completed/**",
                                 "/api/v1/orders/dashboard/stats"
-                        ).hasAnyRole("ADMIN", "WAITER")
+                        ).access(restaurantOrInstantAdminOrWaiter)
 
-                        // Allow both ADMIN and WAITER roles to execute GET requests
-                        .requestMatchers(HttpMethod.GET, "/api/v1/receipt-settings/**").hasAnyRole("ADMIN", "WAITER")
+                        // 5b. Receipt settings — Restaurant + Instant
+                        .requestMatchers(HttpMethod.GET, "/api/v1/receipt-settings/**").access(restaurantOrInstantAdminOrWaiter)
+                        .requestMatchers(HttpMethod.POST, "/api/v1/receipt-settings/**").access(restaurantInstantAdminOnly)
 
-                        // Restrict POST requests strictly to the ADMIN role
-                        .requestMatchers(HttpMethod.POST, "/api/v1/receipt-settings/**").hasRole("ADMIN")
+                        // 6. MENU & SYNC OPERATIONS — Restaurant + Instant only
+                        // 🌟 A BuyAndSell/Car account has no menu concept at all.
+                        .requestMatchers(HttpMethod.DELETE, "/api/v1/menu/**").access(restaurantInstantAdminOnly)
+                        .requestMatchers("/api/v1/menu/version").access(requireRoleAndUserType(Set.of("ADMIN", "WAITER", "CHEF"), Set.of("RESTAURANT", "INSTANT")))
+                        .requestMatchers(HttpMethod.POST, "/api/v1/menu/**").access(restaurantInstantAdminOnly)
+                        .requestMatchers(HttpMethod.GET, "/api/v1/menu/**").access(restaurantOrInstantAdminOrWaiter)
 
-                        // 6. MENU & SYNC OPERATIONS
-                        .requestMatchers(HttpMethod.DELETE, "/api/v1/menu/**").hasRole("ADMIN")
-                        .requestMatchers("/api/v1/menu/version").hasAnyRole("ADMIN", "WAITER", "CHEF")
-                        .requestMatchers(HttpMethod.POST, "/api/v1/menu/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.GET, "/api/v1/menu/**").authenticated()
+                        // 7. BUY & SELL — its own account type, nothing to do with restaurant/instant
+                        .requestMatchers("/api/v1/items/**").access(requireRoleAndUserType(Set.of("ADMIN"), Set.of("BUYANDSELL")))
 
-                        // 7. ACCOUNT OPERATIONS
+                        // 8. ACCOUNT OPERATIONS
                         .requestMatchers("/api/v1/admin/logout", "/api/v1/employees/logout").authenticated()
 
-                        // 8. CATCH-ALL
+                        // 9. CATCH-ALL
                         .anyRequest().authenticated()
                 )
 
-                // 🌟 PROTECT SYSTEM: Intercept & drop brute-force attacks at edge layer before spending RAM evaluating JWT tokens
                 .addFilterBefore(rateLimitingFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(jwtAuthenticationFilter, RateLimitingFilter.class)
                 .formLogin(form -> form.disable())
@@ -180,7 +239,7 @@ public class SecurityConfig {
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource(); //  Corrected
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
     }
