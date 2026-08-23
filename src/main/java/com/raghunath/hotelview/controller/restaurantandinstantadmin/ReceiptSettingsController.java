@@ -1,0 +1,55 @@
+package com.raghunath.hotelview.controller.restaurantandinstantadmin;
+
+import com.raghunath.hotelview.dto.restaurantandinstant.ReceiptSettingsDTO;
+import com.raghunath.hotelview.security.UserTypeAccessGuard;
+import com.raghunath.hotelview.service.restaurantandinstantadmin.ReceiptSettingsService;
+import com.raghunath.hotelview.security.JwtUtil; // Replace with your exact project layout path to JwtUtil
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/v1/receipt-settings")
+@RequiredArgsConstructor
+public class ReceiptSettingsController {
+
+    private final ReceiptSettingsService service;
+    private final JwtUtil jwtUtil;
+    private final UserTypeAccessGuard userTypeAccessGuard;
+
+    // --- TABLE & HOME RECEIPT ENDPOINTS ---
+
+    @GetMapping("/table-home")
+    public ResponseEntity<ReceiptSettingsDTO> getTableHomeSettings(@RequestHeader("Authorization") String authHeader) {
+        userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
+        String hotelId = jwtUtil.extractHotelId(authHeader.substring(7).trim());
+        return ResponseEntity.ok(service.getSettings(hotelId, "TABLE_HOME"));
+    }
+
+    @PostMapping("/table-home")
+    public ResponseEntity<String> saveTableHomeSettings(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestBody ReceiptSettingsDTO dto) {
+        userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
+        String hotelId = jwtUtil.extractHotelId(authHeader.substring(7).trim());
+        return ResponseEntity.ok(service.saveSettings(hotelId, "TABLE_HOME", dto));
+    }
+
+    // --- INSTANT RECEIPT ENDPOINTS ---
+
+    @GetMapping("/instant")
+    public ResponseEntity<ReceiptSettingsDTO> getInstantSettings(@RequestHeader("Authorization") String authHeader) {
+        userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT", "INSTANT");
+        String hotelId = jwtUtil.extractHotelId(authHeader.substring(7).trim());
+        return ResponseEntity.ok(service.getSettings(hotelId, "INSTANT"));
+    }
+
+    @PostMapping("/instant")
+    public ResponseEntity<String> saveInstantSettings(
+            @RequestHeader("Authorization") String authHeader,
+            @RequestBody ReceiptSettingsDTO dto) {
+        userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT", "INSTANT");
+        String hotelId = jwtUtil.extractHotelId(authHeader.substring(7).trim());
+        return ResponseEntity.ok(service.saveSettings(hotelId, "INSTANT", dto));
+    }
+}

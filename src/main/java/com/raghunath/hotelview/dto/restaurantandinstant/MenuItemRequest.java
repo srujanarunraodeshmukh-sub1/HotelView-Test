@@ -1,0 +1,41 @@
+package com.raghunath.hotelview.dto.restaurantandinstant;
+
+import lombok.*;
+
+import java.math.BigDecimal;
+
+@Getter
+@Setter
+public class MenuItemRequest {
+
+    private String hotelId;
+
+    private String category;
+
+    private String name;
+
+    private String shortCode;
+
+    private String description;
+
+    private BigDecimal price;
+
+    private String quantity;
+
+    private Double totalQuantity;
+
+    private String totalquantityUnit;
+
+    private String unit;
+
+    private Boolean isVeg;
+
+    private Boolean isAvailable;
+
+    private String imageUrl;
+
+    private Integer preparationTime;
+
+    private Double gstPercent;
+
+}

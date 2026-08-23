@@ -1,0 +1,16 @@
+package com.raghunath.hotelview.dto.restaurantandinstant;
+
+import lombok.Builder;
+import lombok.Data;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+public class DeliverySummaryDTO {
+    private String id;
+    private String orderType;
+    private String customerName;
+    private String customerMobile;
+    private Double totalPayable;
+    private LocalDateTime checkoutAt;
+}

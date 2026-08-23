@@ -1,0 +1,80 @@
+package com.raghunath.hotelview.controller.restaurantandinstantadmin;
+
+import com.raghunath.hotelview.entity.restaurantandinstant.Employee;
+import com.raghunath.hotelview.security.UserTypeAccessGuard;
+import com.raghunath.hotelview.service.restaurantandinstantadmin.EmployeeService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/v1/employees")
+@RequiredArgsConstructor
+public class EmployeeController {
+
+    private final EmployeeService employeeService;
+    private final UserTypeAccessGuard userTypeAccessGuard;
+
+    @PostMapping("/register")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<String> addEmployee(@RequestBody Employee employee) {
+        String hotelId = SecurityContextHolder.getContext().getAuthentication().getName();
+        try {
+            String response = employeeService.registerEmployee(employee, hotelId);
+            return ResponseEntity.ok(response);
+        } catch (RuntimeException e) {
+            // Returns a 400 Bad Request alongside your explicit upgrade prompt text string
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<Map<String, String>> login(@RequestBody Map<String, String> credentials) {
+        return ResponseEntity.ok(employeeService.login(
+                credentials.get("username"),
+                credentials.get("password")
+        ));
+    }
+
+    @GetMapping("/list")
+    @PreAuthorize("hasRole('ADMIN')")
+    public List<Employee> listStaff() {
+        String hotelId = userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT", "INSTANT");
+        return employeeService.getMyStaff(hotelId);
+    }
+
+    @PostMapping("/refresh-token")
+    public ResponseEntity<Map<String, String>> refresh(@RequestBody Map<String, String> request) {
+        return ResponseEntity.ok(employeeService.refreshEmployeeToken(request.get("refreshToken")));
+    }
+
+    @PutMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<String> updateEmployee(@PathVariable String id, @RequestBody Employee employee) {
+        String hotelId = userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT", "INSTANT");
+        return ResponseEntity.ok(employeeService.updateEmployee(id, hotelId, employee));
+    }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<String> deleteEmployee(@PathVariable String id) {
+        String hotelId = userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT", "INSTANT");
+        employeeService.deleteEmployee(id, hotelId);
+        return ResponseEntity.ok("Employee deleted and sessions revoked successfully");
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<String> logout(@RequestBody Map<String, String> request) {
+        String empId = SecurityContextHolder.getContext().getAuthentication().getName();
+        String token = request.get("refreshToken");
+
+        employeeService.logoutEmployee(empId, token);
+
+        return ResponseEntity.ok("Staff logged out successfully");
+    }
+}

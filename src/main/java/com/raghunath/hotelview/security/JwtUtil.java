@@ -28,9 +28,9 @@ public class JwtUtil {
     }
 
     // REMOVED 'Long version' to match your Service calls
-    public String generateAccessToken(String userId, String hotelId, String role) {
+    public String generateAccessToken(String userId, String hotelId, String role, String userType) {
         return Jwts.builder()
-                .setClaims(Map.of("hotelId", hotelId, "role", role))
+                .setClaims(Map.of("hotelId", hotelId, "role", role, "userType", userType))
                 .setSubject(userId)
                 .setIssuedAt(new Date())
                 .setExpiration(new Date(System.currentTimeMillis() + ACCESS_TOKEN_VALIDITY))
@@ -39,9 +39,9 @@ public class JwtUtil {
     }
 
     // REMOVED 'Long version' to match your Service calls
-    public String generateRefreshToken(String userId, String hotelId, String role) {
+    public String generateRefreshToken(String userId, String hotelId, String role, String userType) {
         return Jwts.builder()
-                .setClaims(Map.of("hotelId", hotelId, "role", role))
+                .setClaims(Map.of("hotelId", hotelId, "role", role, "userType", userType))
                 .setSubject(userId)
                 .setIssuedAt(new Date())
                 .setExpiration(new Date(System.currentTimeMillis() + REFRESH_TOKEN_VALIDITY))
@@ -68,6 +68,10 @@ public class JwtUtil {
 
     public String extractRole(String token) {
         return extractAllClaims(token).get("role", String.class);
+    }
+
+    public String extractUserType(String token) {
+        return extractAllClaims(token).get("userType", String.class);
     }
 
     public boolean validateToken(String token) {

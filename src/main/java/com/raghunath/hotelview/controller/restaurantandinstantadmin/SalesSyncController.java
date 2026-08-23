@@ -1,0 +1,198 @@
+package com.raghunath.hotelview.controller.restaurantandinstantadmin;
+
+import com.raghunath.hotelview.entity.restaurantandinstant.CompletedOrder;
+import com.raghunath.hotelview.repository.restaurantandinstant.CompleteOrderRepository;
+import com.raghunath.hotelview.security.UserTypeAccessGuard;
+import com.raghunath.hotelview.service.restaurantandinstantadmin.VersionService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/v1/sync")
+@RequiredArgsConstructor
+public class SalesSyncController {
+
+    private final VersionService versionService;
+    private final CompleteOrderRepository orderRepo;
+    private final UserTypeAccessGuard userTypeAccessGuard;
+
+    private String getHotelId() {
+        return userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT", "INSTANT");
+    }
+
+    private String getRestaurantHotelId() {
+        return userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT");
+    }
+
+    // ─────────────────────────────────────────────────────
+    // SALES API 1: Version (timestamp) + Count
+    // GET /api/v1/sync/sales/version
+    //
+    // Krishna logic:
+    // if serverVersion == localVersion → do nothing
+    // if serverVersion > localVersion  → call /sales/delta?since={localVersion}
+    // after delta: if serverCount != localCount → call full sales API
+    // ─────────────────────────────────────────────────────
+    @GetMapping("/sales/version")
+    public ResponseEntity<Map<String, Object>> getSalesVersion() {
+        String hotelId = getHotelId();
+        String todayDate = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"))
+                .format(DateTimeFormatter.ISO_LOCAL_DATE);
+
+        long version = versionService.getSalesVersion(hotelId);
+
+        // Auto-initialize if never bumped before
+        if (version == 0L) {
+            versionService.bumpSales(hotelId);
+            versionService.bumpTables(hotelId);
+            versionService.bumpKitchen(hotelId);
+            version = versionService.getSalesVersion(hotelId);
+        }
+
+        long todayCount = orderRepo.countByHotelIdAndCheckoutDate(hotelId, todayDate);
+        long totalCount = orderRepo.countByHotelId(hotelId); // ✅ All time total
+
+        return ResponseEntity.ok(Map.of(
+                "version", version,
+                "todayCount", todayCount,
+                "totalCount", totalCount,  // ✅ Added
+                "date", todayDate
+        ));
+    }
+
+    // ─────────────────────────────────────────────────────
+    // SALES API 2: Delta since timestamp
+    // GET /api/v1/sync/sales/delta?since=1746057600000
+    //
+    // Krishna passes his localVersion (timestamp millis) as since
+    // Gets only orders modified after that timestamp
+    // ─────────────────────────────────────────────────────
+    @GetMapping("/sales/delta")
+    public ResponseEntity<Map<String, Object>> getSalesDelta(
+            @RequestParam long since) { // ✅ long instead of String
+
+        String hotelId = getHotelId();
+        ZonedDateTime nowIST = ZonedDateTime.now(ZoneId.of("Asia/Kolkata"));
+        String todayDate = nowIST.format(DateTimeFormatter.ISO_LOCAL_DATE);
+
+        // 1. Convert millis timestamp to LocalDateTime
+        LocalDateTime sinceTime = Instant.ofEpochMilli(since)
+                .atZone(ZoneId.of("Asia/Kolkata"))
+                .toLocalDateTime();
+
+        // 🚀 2. FIXED: Extract the clean YYYY-MM-DD date string to pass to our updated query layout
+        String sinceDateStr = sinceTime.toLocalDate().toString();
+
+        // 🚀 3. FIXED: Call the updated repository method name using our combined string properties
+        List<CompletedOrder> deltaOrders = orderRepo
+                .findByHotelIdAndCheckoutDateGreaterThanEqualOrderByCheckoutDateDescCheckoutTimeDesc(
+                        hotelId, sinceDateStr);
+
+        long serverCount = orderRepo.countByHotelIdAndCheckoutDate(hotelId, todayDate);
+        long totalCount = orderRepo.countByHotelId(hotelId);
+
+        // Build your return map payload here (adjust to match your existing map return structure)
+        Map<String, Object> response = new HashMap<>();
+        response.put("deltaOrders", deltaOrders);
+        response.put("serverCount", serverCount);
+        response.put("totalCount", totalCount);
+
+        return ResponseEntity.ok(response);
+    }
+
+    // ─────────────────────────────────────────────────────
+    // TABLE API 1: Version (timestamp) + Count
+    // GET /api/v1/sync/tables/version
+    // ─────────────────────────────────────────────────────
+    @GetMapping("/tables/version")
+    public ResponseEntity<Map<String, Object>> getTableVersion() {
+        String hotelId = getRestaurantHotelId();
+        long version = versionService.getTableVersion(hotelId);
+        long count = versionService.getTableCount(hotelId);
+
+        return ResponseEntity.ok(Map.of(
+                "version", version,     // timestamp millis
+                "totalCount", count     // total tables count
+        ));
+    }
+
+    // ─────────────────────────────────────────────────────
+    // TABLE API 2: Delta since timestamp
+    // GET /api/v1/sync/tables/delta?since=1746057600000
+    // ─────────────────────────────────────────────────────
+    @GetMapping("/tables/delta")
+    public ResponseEntity<Map<String, Object>> getTableDelta(
+            @RequestParam long since) {
+
+        String hotelId = getRestaurantHotelId();
+
+        LocalDateTime sinceTime = Instant.ofEpochMilli(since)
+                .atZone(ZoneId.of("Asia/Kolkata"))
+                .toLocalDateTime();
+
+        List<?> deltaTables = versionService.getTablesDeltaSince(
+                hotelId, sinceTime);
+        long totalCount = versionService.getTableCount(hotelId);
+
+        return ResponseEntity.ok(Map.of(
+                "deltaTables", deltaTables,  // only changed tables
+                "totalCount", totalCount     // total count for verification
+        ));
+    }
+
+    // ─────────────────────────────────────────────────────
+    // KITCHEN API 1: Version (timestamp) + Count for table
+    // GET /api/v1/sync/kitchen/version?tableNumber=3
+    // ─────────────────────────────────────────────────────
+    @GetMapping("/kitchen/version")
+    public ResponseEntity<Map<String, Object>> getKitchenVersion(
+            @RequestParam String tableName) {
+
+        String hotelId = getHotelId();
+        long version = versionService.getKitchenVersion(hotelId);
+        long count = versionService.getKitchenOrderCount(hotelId, tableName);
+
+        return ResponseEntity.ok(Map.of(
+                "version", version,             // timestamp millis
+                "activeOrderCount", count,      // active orders for this table
+                "tableNumber", tableName
+        ));
+    }
+
+    // ─────────────────────────────────────────────────────
+    // KITCHEN API 2: Delta since timestamp for table
+    // GET /api/v1/sync/kitchen/delta?tableNumber=3&since=1746057600000
+    // ─────────────────────────────────────────────────────
+    @GetMapping("/kitchen/delta")
+    public ResponseEntity<Map<String, Object>> getKitchenDelta(
+            @RequestParam String tableName,
+            @RequestParam long since) {
+
+        String hotelId = getHotelId();
+
+        LocalDateTime sinceTime = Instant.ofEpochMilli(since)
+                .atZone(ZoneId.of("Asia/Kolkata"))
+                .toLocalDateTime();
+
+        List<?> deltaOrders = versionService.getKitchenDeltaSince(
+                hotelId, tableName, sinceTime);
+        long activeCount = versionService.getKitchenOrderCount(
+                hotelId, tableName);
+
+        return ResponseEntity.ok(Map.of(
+                "deltaOrders", deltaOrders,     // only changed orders for table
+                "activeOrderCount", activeCount,
+                "tableName", tableName
+        ));
+    }
+}

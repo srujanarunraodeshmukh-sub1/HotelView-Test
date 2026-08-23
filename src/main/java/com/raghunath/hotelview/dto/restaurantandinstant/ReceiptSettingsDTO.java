@@ -1,0 +1,26 @@
+package com.raghunath.hotelview.dto.restaurantandinstant;
+
+import lombok.*;
+
+import java.util.List;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class ReceiptSettingsDTO {
+    private boolean printRestaurantName;
+    private boolean printBusinessAddress;
+    private boolean printCustomerNumber;
+    private boolean includeRestaurantLogo;
+    private boolean printDateTime;
+    private boolean showOrderTypeLabel;
+    private boolean displayOrderId;
+    private boolean showCustomerDetails;
+    private boolean printUpiAndQr;
+    private boolean printGreetingNote;
+    private boolean printItemQuantities;
+    private boolean printGstNumber;
+    private boolean applyItemLevelGst;
+    private List<ReceiptGstToggleDTO> gstDetails;
+}
