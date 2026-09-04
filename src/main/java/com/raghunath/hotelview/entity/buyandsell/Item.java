@@ -37,6 +37,10 @@ public class Item {
     @LastModifiedDate
     private Instant updatedAt;
 
+    // --- Delta Sync Fields ---
+    private long version;
+    private boolean isDeleted;
+
     // Constructors
     public Item() {}
 
@@ -151,5 +155,22 @@ public class Item {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    // --- Delta Sync Getters & Setters ---
+    public long getVersion() {
+        return version;
+    }
+
+    public void setVersion(long version) {
+        this.version = version;
+    }
+
+    public boolean isDeleted() {
+        return isDeleted;
+    }
+
+    public void setDeleted(boolean deleted) {
+        isDeleted = deleted;
     }
 }
