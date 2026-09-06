@@ -15,13 +15,11 @@ public class ReceiptSettingsController {
 
     private final ReceiptSettingsService service;
     private final JwtUtil jwtUtil;
-    private final UserTypeAccessGuard userTypeAccessGuard;
 
     // --- TABLE & HOME RECEIPT ENDPOINTS ---
 
     @GetMapping("/table-home")
     public ResponseEntity<ReceiptSettingsDTO> getTableHomeSettings(@RequestHeader("Authorization") String authHeader) {
-        userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
         String hotelId = jwtUtil.extractHotelId(authHeader.substring(7).trim());
         return ResponseEntity.ok(service.getSettings(hotelId, "TABLE_HOME"));
     }
@@ -30,7 +28,6 @@ public class ReceiptSettingsController {
     public ResponseEntity<String> saveTableHomeSettings(
             @RequestHeader("Authorization") String authHeader,
             @RequestBody ReceiptSettingsDTO dto) {
-        userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
         String hotelId = jwtUtil.extractHotelId(authHeader.substring(7).trim());
         return ResponseEntity.ok(service.saveSettings(hotelId, "TABLE_HOME", dto));
     }
@@ -39,7 +36,6 @@ public class ReceiptSettingsController {
 
     @GetMapping("/instant")
     public ResponseEntity<ReceiptSettingsDTO> getInstantSettings(@RequestHeader("Authorization") String authHeader) {
-        userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT", "INSTANT");
         String hotelId = jwtUtil.extractHotelId(authHeader.substring(7).trim());
         return ResponseEntity.ok(service.getSettings(hotelId, "INSTANT"));
     }
@@ -48,7 +44,6 @@ public class ReceiptSettingsController {
     public ResponseEntity<String> saveInstantSettings(
             @RequestHeader("Authorization") String authHeader,
             @RequestBody ReceiptSettingsDTO dto) {
-        userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT", "INSTANT");
         String hotelId = jwtUtil.extractHotelId(authHeader.substring(7).trim());
         return ResponseEntity.ok(service.saveSettings(hotelId, "INSTANT", dto));
     }

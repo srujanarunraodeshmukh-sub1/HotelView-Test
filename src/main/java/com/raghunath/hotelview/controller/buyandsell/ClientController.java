@@ -2,6 +2,7 @@ package com.raghunath.hotelview.controller.buyandsell;
 
 import com.raghunath.hotelview.dto.buyandsell.CreateClientRequest;
 import com.raghunath.hotelview.dto.buyandsell.SyncInfoDTO;
+import com.raghunath.hotelview.dto.buyandsell.UpdateClientRequest;
 import com.raghunath.hotelview.entity.buyandsell.ClientRequirement;
 import com.raghunath.hotelview.security.UserTypeAccessGuard;
 import com.raghunath.hotelview.service.buyandsell.ClientService;
@@ -33,6 +34,23 @@ public class ClientController {
         response.put("message", "Client requirement created successfully!");
         response.put("serverVersion", savedClient.getVersion());
         response.put("data", savedClient);
+
+        return ResponseEntity.ok(response);
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> updateClientRequirement(
+            @PathVariable("id") String clientId,
+            @RequestBody UpdateClientRequest request) {
+
+        String currentDealerId = userTypeAccessGuard.enforceUserTypeForCurrentUser("BUYANDSELL");
+        ClientRequirement updatedClient = clientService.updateClient(currentDealerId, clientId, request);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("message", "Client requirement updated successfully!");
+        response.put("serverVersion", updatedClient.getVersion());
+        response.put("data", updatedClient);
 
         return ResponseEntity.ok(response);
     }

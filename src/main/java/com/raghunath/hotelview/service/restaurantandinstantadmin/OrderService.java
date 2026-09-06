@@ -1411,7 +1411,7 @@ public class OrderService {
         String last24HoursStartTime = last24HoursStart.format(DateTimeFormatter.ofPattern("HH:mm:ss"));
         String nowTime = nowIST.format(DateTimeFormatter.ofPattern("HH:mm:ss"));
 
-        String restaurantName = admin.getRestaurantName() != null ? admin.getRestaurantName() : "Unknown Restaurant";
+        String restaurantName = admin.getRestaurantName() != null ? admin.getRestaurantName() : "";
         String planType = admin.getPlanType() != null ? admin.getPlanType() : "BASIC";
 
         List<String> activeStatuses = List.of("PENDING", "ACCEPTED", "ACTIVE");
