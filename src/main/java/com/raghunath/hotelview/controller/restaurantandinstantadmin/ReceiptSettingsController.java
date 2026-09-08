@@ -16,7 +16,6 @@ public class ReceiptSettingsController {
     private final ReceiptSettingsService service;
     private final JwtUtil jwtUtil;
 
-    // --- TABLE & HOME RECEIPT ENDPOINTS ---
 
     @GetMapping("/table-home")
     public ResponseEntity<ReceiptSettingsDTO> getTableHomeSettings(@RequestHeader("Authorization") String authHeader) {

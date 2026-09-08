@@ -18,4 +18,5 @@ public class DealerDataVersion {
     private String dealerId;
     private long clientVersion;
     private long itemVersion;
+    private long completedDealVersion;
 }

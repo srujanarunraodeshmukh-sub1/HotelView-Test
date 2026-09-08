@@ -45,4 +45,21 @@ public class DeltaSyncService {
         return versionRepository.findByDealerId(dealerId)
                 .map(DealerDataVersion::getItemVersion).orElse(0L);
     }
+
+    public synchronized long getNextCompletedDealVersion(String dealerId) {
+        DealerDataVersion v = versionRepository.findByDealerId(dealerId)
+                .orElseGet(() -> {
+                    DealerDataVersion newV = new DealerDataVersion();
+                    newV.setDealerId(dealerId);
+                    return newV;
+                });
+        v.setCompletedDealVersion(v.getCompletedDealVersion() + 1);
+        versionRepository.save(v);
+        return v.getCompletedDealVersion();
+    }
+
+    public long getCurrentCompletedDealVersion(String dealerId) {
+        return versionRepository.findByDealerId(dealerId)
+                .map(DealerDataVersion::getCompletedDealVersion).orElse(0L);
+    }
 }
