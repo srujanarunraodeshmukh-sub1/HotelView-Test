@@ -24,6 +24,12 @@ public class DeltaSyncService {
         return v.getClientVersion();
     }
 
+    public long getCurrentClientVersion(String dealerId) {
+        return versionRepository.findByDealerId(dealerId)
+                .map(DealerDataVersion::getClientVersion).orElse(0L);
+    }
+
+
     public synchronized long getNextItemVersion(String dealerId) {
         DealerDataVersion v = versionRepository.findByDealerId(dealerId)
                 .orElseGet(() -> {
@@ -36,15 +42,11 @@ public class DeltaSyncService {
         return v.getItemVersion();
     }
 
-    public long getCurrentClientVersion(String dealerId) {
-        return versionRepository.findByDealerId(dealerId)
-                .map(DealerDataVersion::getClientVersion).orElse(0L);
-    }
-
     public long getCurrentItemVersion(String dealerId) {
         return versionRepository.findByDealerId(dealerId)
                 .map(DealerDataVersion::getItemVersion).orElse(0L);
     }
+
 
     public synchronized long getNextCompletedDealVersion(String dealerId) {
         DealerDataVersion v = versionRepository.findByDealerId(dealerId)
@@ -61,5 +63,23 @@ public class DeltaSyncService {
     public long getCurrentCompletedDealVersion(String dealerId) {
         return versionRepository.findByDealerId(dealerId)
                 .map(DealerDataVersion::getCompletedDealVersion).orElse(0L);
+    }
+
+
+    public synchronized long getNextInsuranceVersion(String dealerId){
+        DealerDataVersion v = versionRepository.findByDealerId(dealerId)
+                .orElseGet(() -> {
+                    DealerDataVersion newV = new DealerDataVersion();
+                    newV.setDealerId(dealerId);
+                    return newV;
+                });
+        v.setInsuranceVersion(v.getInsuranceVersion() + 1);
+        versionRepository.save(v);
+        return v.getInsuranceVersion();
+    }
+
+    public long getCurrentInsuranceVersion(String dealerId){
+        return versionRepository.findByDealerId(dealerId)
+                .map(DealerDataVersion::getInsuranceVersion).orElse(0L);
     }
 }

@@ -19,4 +19,5 @@ public class DealerDataVersion {
     private long clientVersion;
     private long itemVersion;
     private long completedDealVersion;
+    private long insuranceVersion;
 }
