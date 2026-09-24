@@ -171,7 +171,7 @@ public class CustomerOrderService {
                 .orderType("TABLE")
                 .items(items)
                 .totalAmount(total)
-                .status("PENDING") // Waiter will confirm this order
+                .status("AWAITING") // Waiter will confirm this order
                 .comments(comment)
                 .placedBy("CUSTOMER")
                 .createdDate(nowIST.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")))

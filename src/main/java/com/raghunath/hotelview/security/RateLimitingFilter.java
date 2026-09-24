@@ -23,6 +23,8 @@ public class RateLimitingFilter extends OncePerRequestFilter {
 
     private final Map<String, Bucket> authCache = new ConcurrentHashMap<>();
     private final Map<String, Bucket> publicCache = new ConcurrentHashMap<>();
+    private final Map<String, Bucket> customerLoginCache = new ConcurrentHashMap<>(); // 🌟 NEW
+    private final Map<String, Bucket> nonStaffCache = new ConcurrentHashMap<>();      // 🌟 NEW
 
     private Bucket createAuthBucket() {
         return Bucket.builder()
@@ -36,11 +38,25 @@ public class RateLimitingFilter extends OncePerRequestFilter {
                 .build();
     }
 
-    // 🌟 CRITICAL FIX: Explicitly exclude public customer QR routes from being blocked
+    // 🌟 NEW: dedicated, tighter bucket just for customer login — 10/min/IP
+    private Bucket createCustomerLoginBucket() {
+        return Bucket.builder()
+                .addLimit(Bandwidth.classic(10, Refill.intervally(10, Duration.ofMinutes(1))))
+                .build();
+    }
+
+    // 🌟 NEW: general post-login traffic for customer + delivery boy — 10/min/IP
+    private Bucket createNonStaffBucket() {
+        return Bucket.builder()
+                .addLimit(Bandwidth.classic(10, Refill.intervally(10, Duration.ofMinutes(1))))
+                .build();
+    }
+
+    // 🌟 CHANGED: no longer skips /api/v1/user/** — that traffic must pass
+    // through so it can be matched against the buckets below.
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
-        String path = request.getServletPath();
-        return path.startsWith("/api/v1/user/");
+        return false;
     }
 
     @Override
@@ -51,8 +67,16 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         String path = request.getServletPath();
         String ip = request.getRemoteAddr();
 
-        // 🛡️ SHIELD 1: PROTECT GATEWAYS
-        if (path.contains("/login") || path.contains("/register") || path.contains("/refresh-token")) {
+        // 🛡️ SHIELD 0: CUSTOMER LOGIN — dedicated 10/min/IP, checked before the generic auth shield
+        if (path.equals("/api/v1/user/auth/login")) {
+            Bucket bucket = customerLoginCache.computeIfAbsent(ip, k -> createCustomerLoginBucket());
+            if (!bucket.tryConsume(1)) {
+                sendTooManyRequestsResponse(response, "Too many login attempts. Please try again in a minute.");
+                return;
+            }
+        }
+        // 🛡️ SHIELD 1: PROTECT GATEWAYS (admin/employee/delivery-boy login, all refresh-token routes)
+        else if (path.contains("/login") || path.contains("/register") || path.contains("/refresh-token")) {
             Bucket bucket = authCache.computeIfAbsent(ip, k -> createAuthBucket());
             if (!bucket.tryConsume(1)) {
                 sendTooManyRequestsResponse(response, "Authentication threshold exceeded. Please try again in a minute.");
@@ -67,10 +91,21 @@ public class RateLimitingFilter extends OncePerRequestFilter {
                 return;
             }
         }
+        // 🛡️ SHIELD 3: CUSTOMER & DELIVERY BOY POST-LOGIN TRAFFIC — 10/min/IP
+        else if ((path.startsWith("/api/v1/user/") && !path.startsWith("/api/v1/user/auth/")) ||
+                (path.startsWith("/api/v1/delivery/") && !path.startsWith("/api/v1/delivery/auth/"))) {
+            Bucket bucket = nonStaffCache.computeIfAbsent(ip, k -> createNonStaffBucket());
+            if (!bucket.tryConsume(1)) {
+                sendTooManyRequestsResponse(response, "Too many requests. Please slow down.");
+                return;
+            }
+        }
 
         // MEMORY SAFETY GUARD
         if (authCache.size() > 10000) authCache.clear();
         if (publicCache.size() > 10000) publicCache.clear();
+        if (customerLoginCache.size() > 10000) customerLoginCache.clear();
+        if (nonStaffCache.size() > 10000) nonStaffCache.clear();
 
         filterChain.doFilter(request, response);
     }

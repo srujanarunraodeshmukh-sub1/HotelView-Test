@@ -7,7 +7,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authorization.AuthorityAuthorizationManager;
 import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.authorization.AuthorizationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
@@ -57,15 +56,6 @@ public class SecurityConfig {
         return authenticationConfiguration.getAuthenticationManager();
     }
 
-    /**
-     * 🌟 NEW: builds an AuthorizationManager that requires the caller to hold
-     * AT LEAST ONE of the given roles AND AT LEAST ONE of the given userTypes.
-     * Reads both straight off the authorities granted by JwtAuthenticationFilter
-     * (ROLE_x and USERTYPE_x) — no DB lookup, no dependency on which Admin
-     * entity/repository handled login. This is the single choke point: a
-     * BuyAndSell (or any non-matching) token cannot pass a path guarded this
-     * way, regardless of what any individual controller does or doesn't check.
-     */
     private AuthorizationManager<RequestAuthorizationContext> requireRoleAndUserType(
             Set<String> allowedRoles, Set<String> allowedUserTypes) {
 
@@ -89,7 +79,6 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
 
-        // 🌟 Reusable guards for the two account-type groups in play.
         AuthorizationManager<RequestAuthorizationContext> restaurantOrInstantAdminOrWaiter =
                 requireRoleAndUserType(Set.of("ADMIN", "WAITER"), Set.of("RESTAURANT", "INSTANT"));
 
@@ -111,6 +100,10 @@ public class SecurityConfig {
         AuthorizationManager<RequestAuthorizationContext> restaurantOnlyAdminOnly =
                 requireRoleAndUserType(Set.of("ADMIN"), Set.of("RESTAURANT"));
 
+        // 🌟 NEW: home-delivery staff endpoints — Admin, Waiter, or Chef; Restaurant or Instant account
+        AuthorizationManager<RequestAuthorizationContext> homeDeliveryStaffAccess =
+                requireRoleAndUserType(Set.of("ADMIN", "WAITER", "CHEF"), Set.of("RESTAURANT", "INSTANT"));
+
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .csrf(csrf -> csrf.disable())
@@ -120,7 +113,6 @@ public class SecurityConfig {
                         // 1. PUBLIC ENDPOINTS (No Token Needed)
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/info").permitAll()
-                        .requestMatchers("/api/v1/user/**").permitAll()
                         .requestMatchers("/error").permitAll()
                         .requestMatchers(
                                 "/api/v1/admin/login",
@@ -129,6 +121,8 @@ public class SecurityConfig {
                                 "/api/v1/sync/test-bump",
                                 "/api/v1/admin/refresh-token",
                                 "/api/v1/employees/refresh-token",
+                                "/api/v1/delivery/auth/refresh-token",
+                                "/api/v1/user/auth/refresh-token",
                                 "/api/v1/info/terms",
                                 "/api/v1/info/privacy",
                                 "/api/v1/info/**",
@@ -136,14 +130,21 @@ public class SecurityConfig {
                                 "/ws-node/**"
                         ).permitAll()
 
+                        // 🌟 CHANGED: only the login route is public now — everything
+                        // else under /api/v1/user/** requires ROLE_CUSTOMER.
+                        .requestMatchers("/api/v1/user/auth/login").permitAll()
+                        .requestMatchers("/api/v1/user/**").hasRole("CUSTOMER")
+
+                        // 🌟 NEW: delivery boy — only login is public, everything else
+                        // under /api/v1/delivery/** requires ROLE_DELIVERY_BOY.
+                        .requestMatchers("/api/v1/delivery/auth/login").permitAll()
+                        .requestMatchers("/api/v1/delivery/**").hasRole("DELIVERY_BOY")
+
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         .requestMatchers("/api/v1/admin/logout", "/api/v1/employees/logout").authenticated()
 
                         // 2. STAFF & USER MANAGEMENT (Admin Only)
-                        // 🌟 These are restaurant/instant staff-management concepts — a
-                        // BuyAndSell or Car account has no "employees" or "tables", so
-                        // gate by userType here too, not just role.
                         .requestMatchers(
                                 "/api/v1/employees/register",
                                 "/api/v1/admin/profile",
@@ -156,7 +157,7 @@ public class SecurityConfig {
                                 "/api/v1/admin/submit/paymentDetails"
                         ).access(restaurantInstantAdminOnly)
 
-                        // 3. TABLE OPERATIONS — Restaurant only (Instant has no tables)
+                        // 3. TABLE OPERATIONS — Restaurant only
                         .requestMatchers(HttpMethod.GET, "/api/v1/tables").access(restaurantOnlyAdminWaiter)
                         .requestMatchers("/api/v1/tables/transfer/**").access(restaurantOnlyAdminWaiter)
                         .requestMatchers("/api/v1/tables/**").access(restaurantOnlyAdminOnly)
@@ -167,11 +168,6 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PATCH, "/api/v1/orders/kitchen/**").access(restaurantOnlyChefAdmin)
 
                         // 5. ORDER & SALES OPERATIONS — Restaurant + Instant only
-                        // 🌟 THIS is the block that closes the gap we were chasing: checkout,
-                        // direct-checkout, instant/checkout, completed orders, dashboard stats,
-                        // etc. now require USERTYPE_RESTAURANT or USERTYPE_INSTANT in addition
-                        // to the role — a BuyAndSell token fails here regardless of which
-                        // Admin entity/repository its login went through.
                         .requestMatchers("/api/v1/orders/completed/*/inventory-profiles").access(restaurantOnlyAdminOnly)
                         .requestMatchers("/api/v1/orders/summary/completed/**").access(restaurantOnlyAdminOnly)
                         .requestMatchers(
@@ -194,14 +190,18 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/receipt-settings/**").access(restaurantOrInstantAdminOrWaiter)
                         .requestMatchers(HttpMethod.POST, "/api/v1/receipt-settings/**").access(restaurantInstantAdminOnly)
 
+                        // 5c. 🌟 NEW: Home delivery staff operations — Admin/Waiter/Chef, Restaurant or Instant.
+                        // Only covers endpoints 2–7 (pending/accepted/completed/accept/complete/assign) —
+                        // "delivered" lives under /api/v1/delivery/** and is gated separately above.
+                        .requestMatchers("/api/v1/restaurantandinstant/home-delivery/**").access(homeDeliveryStaffAccess)
+
                         // 6. MENU & SYNC OPERATIONS — Restaurant + Instant only
-                        // 🌟 A BuyAndSell/Car account has no menu concept at all.
                         .requestMatchers(HttpMethod.DELETE, "/api/v1/menu/**").access(restaurantInstantAdminOnly)
                         .requestMatchers("/api/v1/menu/version").access(requireRoleAndUserType(Set.of("ADMIN", "WAITER", "CHEF"), Set.of("RESTAURANT", "INSTANT")))
                         .requestMatchers(HttpMethod.POST, "/api/v1/menu/**").access(restaurantInstantAdminOnly)
                         .requestMatchers(HttpMethod.GET, "/api/v1/menu/**").access(restaurantOrInstantAdminOrWaiter)
 
-                        // 7. BUY & SELL — its own account type, nothing to do with restaurant/instant
+                        // 7. BUY & SELL
                         .requestMatchers("/api/v1/items/**").access(requireRoleAndUserType(Set.of("ADMIN"), Set.of("BUYANDSELL")))
 
                         // 8. ACCOUNT OPERATIONS

@@ -60,7 +60,7 @@ public class OrderController {
                 .getAuthentication().getName();
     }
 
-    // 1. SAVE DRAFT FOR SPECIFIC TABLE
+    // 1. SAVE DRAFT FOR SPECIFIC TABLE - NOT IN USE
     @PostMapping("/draft/{tableName}")
     public ResponseEntity<String> saveOrderDraft(@PathVariable String tableName, @Valid @RequestBody List<OrderItem> items) {
         String hotelId = getRestaurantOnlyHotelId();
@@ -68,7 +68,7 @@ public class OrderController {
         return ResponseEntity.ok("Draft saved successfully");
     }
 
-    // 2. GET DRAFT FOR SPECIFIC TABLE
+    // 2. GET DRAFT FOR SPECIFIC TABLE - NOT IN USE
     @GetMapping("/draft/{tableName}")
     public OrderDraft getOrderDraft(@PathVariable String tableName) {
         String hotelId = getRestaurantOnlyHotelId();

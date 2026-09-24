@@ -48,17 +48,24 @@ public class EmployeeService {
 
         // 4. Evaluate Tier Limits
         if (plan.equalsIgnoreCase("Free Tier") || plan.equalsIgnoreCase("Standard")) {
-            if (targetRole.equals("WAITER") && currentWaiters >= 2) {
+            if (targetRole.equals("WAITER") && currentWaiters >= 1) {
                 throw new RuntimeException("Upgrade to premium plan to add more Waiter or Chef");
             }
             if (targetRole.equals("CHEF") && currentChefs >= 1) {
                 throw new RuntimeException("Upgrade to premium plan to add more Waiter or Chef");
             }
         } else if (plan.equalsIgnoreCase("Premium")) {
-            if (targetRole.equals("WAITER") && currentWaiters >= 4) {
+            if (targetRole.equals("WAITER") && currentWaiters >= 2) {
                 throw new RuntimeException("You have reached the maximum limit of 4 Waiters allowed on the Premium tier.");
             }
             if (targetRole.equals("CHEF") && currentChefs >= 2) {
+                throw new RuntimeException("You have reached the maximum limit of 2 Chefs allowed on the Premium tier.");
+            }
+        } else if (plan.equalsIgnoreCase("CustomRequirement")) {
+            if (targetRole.equals("WAITER") && currentWaiters >= 10) {
+                throw new RuntimeException("You have reached the maximum limit of 4 Waiters allowed on the Premium tier.");
+            }
+            if (targetRole.equals("CHEF") && currentChefs >= 10) {
                 throw new RuntimeException("You have reached the maximum limit of 2 Chefs allowed on the Premium tier.");
             }
         }

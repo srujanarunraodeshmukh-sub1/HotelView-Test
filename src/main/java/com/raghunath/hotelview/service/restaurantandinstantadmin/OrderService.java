@@ -1414,7 +1414,7 @@ public class OrderService {
         String restaurantName = admin.getRestaurantName() != null ? admin.getRestaurantName() : "";
         String planType = admin.getPlanType() != null ? admin.getPlanType() : "BASIC";
 
-        List<String> activeStatuses = List.of("PENDING", "ACCEPTED", "ACTIVE");
+        List<String> activeStatuses = List.of("PENDING", "ACCEPTED", "ACTIVE", "AWAITING");
         Long activeTablesCount = tableRepository.countByHotelIdAndStatusIn(hotelId, activeStatuses);
 
         List<String> deliveryTypes = List.of("HOME", "PARCEL");

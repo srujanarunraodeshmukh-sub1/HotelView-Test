@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import java.security.Key;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Map;
 
 @Component
@@ -81,5 +82,59 @@ public class JwtUtil {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    // Customer Module
+
+    public String generateCustomerAccessToken(String customerId) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("role", "CUSTOMER");
+
+        return Jwts.builder()
+                .setClaims(claims)
+                .setSubject(customerId)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + ACCESS_TOKEN_VALIDITY))
+                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .compact();
+    }
+
+    public String generateCustomerRefreshToken(String customerId) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("role", "CUSTOMER");
+
+        return Jwts.builder()
+                .setClaims(claims)
+                .setSubject(customerId)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + REFRESH_TOKEN_VALIDITY))
+                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .compact();
+    }
+
+    public String generateDeliveryBoyAccessToken(String deliveryBoyId) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("role", "DELIVERY_BOY");
+
+        return Jwts.builder()
+                .setClaims(claims)
+                .setSubject(deliveryBoyId)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + ACCESS_TOKEN_VALIDITY))
+                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .compact();
+    }
+
+    public String generateDeliveryBoyRefreshToken(String deliveryBoyId) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("role", "DELIVERY_BOY");
+
+        return Jwts.builder()
+                .setClaims(claims)
+                .setSubject(deliveryBoyId)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + REFRESH_TOKEN_VALIDITY))
+                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .compact();
     }
 }

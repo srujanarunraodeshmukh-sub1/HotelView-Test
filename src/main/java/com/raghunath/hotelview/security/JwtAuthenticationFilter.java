@@ -6,7 +6,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.Cache;
-import org.springframework.cache.CacheManager; // 👈 Core memory cache manager
+import org.springframework.cache.CacheManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -18,19 +18,26 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 @Component
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
-    private final CacheManager cacheManager; // 👈 Inject your native Spring cache manager
+    private final CacheManager cacheManager;
+
+    // 🌟 Roles that carry no hotelId and skip the staff single-session-kill check
+    private static final Set<String> NON_STAFF_ROLES = Set.of("CUSTOMER", "DELIVERY_BOY");
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
-        // 🌟 FIXED HERE: Use getServletPath() instead of getRequestURI()
         String path = request.getServletPath();
-        return path.startsWith("/api/v1/user/") ||
+        // 🌟 NARROWED: only the actual public login routes skip JWT parsing now —
+        // refresh-token/logout for customer & delivery boy must be parsed and
+        // authenticated like any other protected endpoint.
+        return path.equals("/api/v1/user/auth/login") ||
+                path.equals("/api/v1/delivery/auth/login") ||
                 path.startsWith("/api/v1/info/") ||
                 path.startsWith("/api/v1/admin/login") ||
                 path.startsWith("/api/v1/admin/register") ||
@@ -49,45 +56,52 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String token = authHeader.substring(7).trim();
 
             if (jwtUtil.validateToken(token)) {
-                String hotelId = jwtUtil.extractHotelId(token);
+                String role = jwtUtil.extractRole(token);
 
-                // ⚡ Read from RAM Cache instead of hitting MongoDB disk space!
-                Cache activeSessionsCache = cacheManager.getCache("activeSessionsCache");
-                Boolean isSessionActive = null;
-
-                if (activeSessionsCache != null) {
-                    isSessionActive = activeSessionsCache.get(hotelId, Boolean.class);
-                }
-
-                // Fallback: If cache is empty, assume valid or let refresh endpoint handle it
-                if (isSessionActive == null || isSessionActive) {
-                    String role = jwtUtil.extractRole(token);
-                    // 🌟 NEW: pull userType from the JWT claim (embedded at login/register)
-                    // and grant it as a second authority alongside the role. This lets
-                    // SecurityConfig gate endpoints by BOTH role and account type without
-                    // any controller needing to re-query the Admin document.
-                    String userType = jwtUtil.extractUserType(token);
+                // 🌟 CUSTOMER / DELIVERY_BOY: no hotelId claim, no session-kill check —
+                // multiple simultaneous device logins are normal for these roles.
+                if (role != null && NON_STAFF_ROLES.contains(role.toUpperCase())) {
+                    String subjectId = jwtUtil.extractUserId(token);
 
                     List<GrantedAuthority> authorities = new ArrayList<>();
-                    authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
-                    if (userType != null && !userType.isBlank()) {
-                        authorities.add(new SimpleGrantedAuthority("USERTYPE_" + userType.trim().toUpperCase()));
-                    }
+                    authorities.add(new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()));
 
                     UsernamePasswordAuthenticationToken authentication =
-                            new UsernamePasswordAuthenticationToken(
-                                    hotelId,
-                                    null,
-                                    authorities
-                            );
+                            new UsernamePasswordAuthenticationToken(subjectId, null, authorities);
 
                     authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                     SecurityContextHolder.getContext().setAuthentication(authentication);
+
                 } else {
-                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                    response.setContentType("application/json");
-                    response.getWriter().write("{\"error\": \"SESSION_EXPIRED\", \"message\": \"Your session was terminated by another device.\"}");
-                    return;
+                    String hotelId = jwtUtil.extractHotelId(token);
+
+                    Cache activeSessionsCache = cacheManager.getCache("activeSessionsCache");
+                    Boolean isSessionActive = null;
+
+                    if (activeSessionsCache != null) {
+                        isSessionActive = activeSessionsCache.get(hotelId, Boolean.class);
+                    }
+
+                    if (isSessionActive == null || isSessionActive) {
+                        String userType = jwtUtil.extractUserType(token);
+
+                        List<GrantedAuthority> authorities = new ArrayList<>();
+                        authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                        if (userType != null && !userType.isBlank()) {
+                            authorities.add(new SimpleGrantedAuthority("USERTYPE_" + userType.trim().toUpperCase()));
+                        }
+
+                        UsernamePasswordAuthenticationToken authentication =
+                                new UsernamePasswordAuthenticationToken(hotelId, null, authorities);
+
+                        authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                        SecurityContextHolder.getContext().setAuthentication(authentication);
+                    } else {
+                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                        response.setContentType("application/json");
+                        response.getWriter().write("{\"error\": \"SESSION_EXPIRED\", \"message\": \"Your session was terminated by another device.\"}");
+                        return;
+                    }
                 }
             }
         }
