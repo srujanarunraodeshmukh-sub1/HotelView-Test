@@ -164,6 +164,7 @@ public class EmployeeService {
 
     @CacheEvict(value = "dashboardStatsCache", key = "#hotelId")
     public String updateEmployee(String empId, String hotelId, Employee details) {
+
         Employee existingEmp = employeeRepository.findById(empId)
                 .orElseThrow(() -> new RuntimeException("Employee not found"));
 
@@ -172,22 +173,64 @@ public class EmployeeService {
             throw new RuntimeException("Unauthorized to update this employee");
         }
 
-        // Update basic fields
-        if (details.getName() != null) existingEmp.setName(details.getName());
-        if (details.getRole() != null) existingEmp.setRole(details.getRole());
+        // Update username
+        if (details.getUsername() != null &&
+                !details.getUsername().trim().isEmpty()) {
+
+            String newUsername = details.getUsername().trim();
+
+            // Check if username is being changed
+            if (!newUsername.equals(existingEmp.getUsername())) {
+
+                // Check whether another employee already has this username
+                employeeRepository.findByUsername(newUsername)
+                        .ifPresent(employee -> {
+                            if (!employee.getId().equals(existingEmp.getId())) {
+                                throw new RuntimeException(
+                                        "Username already taken!"
+                                );
+                            }
+                        });
+
+                existingEmp.setUsername(newUsername);
+            }
+        }
+
+        // Update name
+        if (details.getName() != null &&
+                !details.getName().trim().isEmpty()) {
+
+            existingEmp.setName(details.getName().trim());
+        }
+
+        // Update role
+        if (details.getRole() != null &&
+                !details.getRole().trim().isEmpty()) {
+
+            existingEmp.setRole(details.getRole().trim().toUpperCase());
+        }
+
+        // Update active status
         existingEmp.setActive(details.isActive());
 
+        // Update max logins
         if (details.getMaxLogins() > 0) {
             existingEmp.setMaxLogins(details.getMaxLogins());
         }
 
-        // Handle Password Update (if provided)
-        if (details.getPassword() != null && !details.getPassword().isEmpty()) {
-            existingEmp.setPassword(passwordEncoder.encode(details.getPassword()));
+        // Update password
+        if (details.getPassword() != null &&
+                !details.getPassword().isEmpty()) {
+
+            existingEmp.setPassword(
+                    passwordEncoder.encode(details.getPassword())
+            );
         }
 
         employeeRepository.save(existingEmp);
-        return "Employee " + existingEmp.getName() + " updated successfully";
+
+        return "Employee " + existingEmp.getName() +
+                " updated successfully";
     }
 
     @CacheEvict(value = "dashboardStatsCache", key = "#hotelId")

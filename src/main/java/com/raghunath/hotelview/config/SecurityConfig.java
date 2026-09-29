@@ -149,16 +149,15 @@ public class SecurityConfig {
 
                         // 2. STAFF & USER MANAGEMENT (Admin Only)
                         .requestMatchers(
-                                "/api/v1/employees/register",
-                                "/api/v1/admin/profile",
                                 "/api/v1/employees/list",
-                                "/api/v1/employees/**",
                                 "/api/v1/admin/myplan/details",
                                 "/api/v1/admin/plan/details",
                                 "/api/v1/admin/integrations",
                                 "/api/v1/admin/customer/details",
                                 "/api/v1/admin/submit/paymentDetails"
                         ).access(restaurantInstantAdminOnly)
+
+                        .requestMatchers("/api/v1/employees/**").hasRole("ADMIN")
 
                         // 3. TABLE OPERATIONS — Restaurant only
                         .requestMatchers(HttpMethod.GET, "/api/v1/tables").access(restaurantOnlyAdminWaiter)
