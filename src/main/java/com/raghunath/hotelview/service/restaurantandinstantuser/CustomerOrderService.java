@@ -133,10 +133,8 @@ public class CustomerOrderService {
             resolvedTableName = table.getTableName();
         } else {
             // Verify table exists by name if ID lookup failed
-            boolean tableExists = restaurantTableRepository.existsByHotelIdAndTableName(cleanHotelId, targetInput);
-            if (!tableExists) {
-                throw new RuntimeException("Table " + targetInput + " does not exist.");
-            }
+            table = restaurantTableRepository.findByHotelIdAndTableName(cleanHotelId, targetInput)
+                    .orElseThrow(() -> new RuntimeException("Table " + targetInput + " does not exist."));
         }
 
         ZonedDateTime nowIST = getISTNow();
@@ -178,7 +176,12 @@ public class CustomerOrderService {
                 .createdTime(nowIST.format(DateTimeFormatter.ofPattern("HH:mm:ss")))
                 .build();
 
-        return customerTableOrderRepository.save(customerOrder);
+        CustomerOrder savedOrder = customerTableOrderRepository.save(customerOrder);
+
+        table.setStatus("AWAITING");
+        restaurantTableRepository.save(table);
+
+        return savedOrder;
     }
 
 }

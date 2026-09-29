@@ -52,7 +52,7 @@ public interface MenuItemRepository extends MongoRepository<MenuItem, String> {
     Optional<MenuItem> findTopByHotelIdOrderByUpdatedAtDesc(String hotelId);
 
 
-    long countByHotelId(String hotelId);
+    long countByHotelIdAndIsApprovedTrue(String hotelId);
 
 
     List<MenuItem> findByHotelIdAndUpdatedAtGreaterThan(String hotelId, LocalDateTime lastSync);

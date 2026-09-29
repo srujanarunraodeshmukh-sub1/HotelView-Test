@@ -181,7 +181,7 @@ public class MenuItemService {
                 })
                 .orElse(0L);
 
-        long count = menuItemRepository.countByHotelId(hotelId);
+        long count = menuItemRepository.countByHotelIdAndIsApprovedTrue(hotelId);
         return new MenuVersionResponse(version, count);
     }
 

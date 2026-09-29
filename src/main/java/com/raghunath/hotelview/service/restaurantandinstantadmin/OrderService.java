@@ -1425,7 +1425,7 @@ public class OrderService {
         Long instantOrdersToday = completeOrderRepository.countByHotelIdAndOrderTypeInAndCheckoutDate(hotelId, deliveryType, todayDate);
 
         Long employeeCount = employeeRepository.countByHotelIdAndIsActive(hotelId, true);
-        Long totalItems = menuItemRepository.countByHotelId(hotelId);
+        Long totalItems = menuItemRepository.countByHotelIdAndIsApprovedTrue(hotelId);
         Long completedTodayCount = completeOrderRepository.countByHotelIdAndCheckoutDate(hotelId, todayDate);
 
         Double todaySalesRupees = 0.0;

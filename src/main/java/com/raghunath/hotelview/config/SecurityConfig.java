@@ -133,7 +133,10 @@ public class SecurityConfig {
                         // 🌟 CHANGED: only the login route is public now — everything
                         // else under /api/v1/user/** requires ROLE_CUSTOMER.
                         .requestMatchers("/api/v1/user/auth/login").permitAll()
-                        .requestMatchers("/api/v1/user/**").hasRole("CUSTOMER")
+
+                        // table customer
+                        .requestMatchers(HttpMethod.POST, "/api/v1/user/orders/place").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/user/orders/table").permitAll()
 
                         // 🌟 NEW: delivery boy — only login is public, everything else
                         // under /api/v1/delivery/** requires ROLE_DELIVERY_BOY.
