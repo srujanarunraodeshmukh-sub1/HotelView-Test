@@ -137,6 +137,7 @@ public class SecurityConfig {
                         // table customer
                         .requestMatchers(HttpMethod.POST, "/api/v1/user/orders/place").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/user/orders/table").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/user/menu").permitAll()
 
                         // 🌟 NEW: delivery boy — only login is public, everything else
                         // under /api/v1/delivery/** requires ROLE_DELIVERY_BOY.
