@@ -1,21 +1,32 @@
 package com.raghunath.hotelview.service.restaurantandinstantadmin;
 
+import com.raghunath.hotelview.entity.restaurantandinstant.Admin;
+import com.raghunath.hotelview.entity.restaurantandinstant.Employee;
 import com.raghunath.hotelview.entity.restaurantandinstant.KitchenOrder;
+import com.raghunath.hotelview.repository.restaurantandinstant.AdminRepository;
+import com.raghunath.hotelview.repository.restaurantandinstant.EmployeeRepository;
 import com.raghunath.hotelview.repository.restaurantandinstant.KitchenOrderRepository;
 import com.raghunath.hotelview.repository.restaurantandinstant.TableRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.bson.Document;
+import java.time.LocalDateTime;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class KitchenOrderingService {
 
+    private final AdminRepository adminRepository;
+    private final MongoTemplate mongoTemplate;
+    private final EmployeeRepository employeeRepository;
     private final KitchenOrderRepository kitchenOrderRepository;
     private final VersionService versionService;
     private final TableRepository tableRepository;
@@ -84,19 +95,88 @@ public class KitchenOrderingService {
      * DELETE ORDER: Removes a kitchen order (scoped to the caller's hotel).
      */
     @Transactional
-    public void deleteOrder(String hotelId, String orderId) {
-        KitchenOrder order = kitchenOrderRepository.findById(orderId)
-                .orElseThrow(() -> new RuntimeException("Order not found"));
+    public void deleteOrder(
+            String hotelId,
+            String orderId,
+            String deletedById,
+            String role) {
 
-        // Multi-tenant safety: never delete another hotel's order
+        // 1. Find the order
+        KitchenOrder order = kitchenOrderRepository.findById(orderId)
+                .orElseThrow(() ->
+                        new RuntimeException("Order not found"));
+
+        // 2. Multi-tenant safety
         if (!hotelId.equals(order.getHotelId())) {
             throw new RuntimeException("Order not found");
         }
 
-        kitchenOrderRepository.delete(order);
-        log.info("Order {} deleted for hotel {}", orderId, hotelId);
+        // 3. Find the name of the person deleting the order
+        String deletedByName;
 
-        // Notify downstream apps so chef/kitchen screens refresh
+        if ("ADMIN".equalsIgnoreCase(role)) {
+
+            // ADMIN
+            Admin admin = adminRepository.findById(deletedById)
+                    .orElseThrow(() ->
+                            new RuntimeException(
+                                    "Admin not found with ID: " + deletedById));
+
+            // Make sure admin belongs to the same hotel
+            if (!hotelId.equals(admin.getHotelId())) {
+                throw new RuntimeException(
+                        "Unauthorized: Admin does not belong to this hotel");
+            }
+
+            deletedByName = admin.getName();
+
+        } else {
+
+            // EMPLOYEE
+            Employee employee = employeeRepository.findById(deletedById)
+                    .orElseThrow(() ->
+                            new RuntimeException(
+                                    "Employee not found with ID: " + deletedById));
+
+            // Make sure employee belongs to the same hotel
+            if (!hotelId.equals(employee.getHotelId())) {
+                throw new RuntimeException(
+                        "Unauthorized: Employee does not belong to this hotel");
+            }
+
+            deletedByName = employee.getName();
+        }
+
+        // 4. Convert KitchenOrder into MongoDB Document
+        Document deletedOrder = new Document();
+
+        mongoTemplate.getConverter().write(
+                order,
+                deletedOrder
+        );
+
+        // 5. Add deletion information
+        deletedOrder.put("deletedBy", deletedByName);
+        deletedOrder.put("deletedAt", LocalDateTime.now());
+
+        // 6. Save complete order into deleted_orders collection
+        mongoTemplate.save(
+                deletedOrder,
+                "deleted_orders"
+        );
+
+        // 7. Delete original order from kitchen_orders
+        kitchenOrderRepository.delete(order);
+
+        // 8. Log deletion
+        log.info(
+                "Order {} deleted by {} for hotel {}",
+                orderId,
+                deletedByName,
+                hotelId
+        );
+
+        // 9. Notify kitchen screens
         versionService.bumpKitchen(hotelId);
     }
 

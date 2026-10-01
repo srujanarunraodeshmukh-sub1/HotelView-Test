@@ -5,11 +5,13 @@ import com.raghunath.hotelview.repository.restaurantandinstant.KitchenOrderRepos
 import com.raghunath.hotelview.security.JwtUtil;
 import com.raghunath.hotelview.security.UserTypeAccessGuard;
 import com.raghunath.hotelview.service.restaurantandinstantadmin.KitchenOrderingService;
+import com.raghunath.hotelview.service.restaurantandinstantadmin.OrderService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/orders")
@@ -20,6 +22,7 @@ public class KitchenOrderingController {
     private final KitchenOrderingService kitchenOrderingService;
     private final JwtUtil jwtUtil;
     private final UserTypeAccessGuard userTypeAccessGuard;
+    private final OrderService orderService;
 
     // 5. CHEF: FETCH PENDING ORDERS
     @GetMapping("/kitchen/pending")
@@ -74,24 +77,34 @@ public class KitchenOrderingController {
     }
 
     // 10. DELETE KITCHEN ORDER (WAITER / ADMIN only, same hotel only)
-    @DeleteMapping("/kitchen/{orderId}")
-    public ResponseEntity<String> deleteOrder(
-            @PathVariable String orderId,
-            @RequestHeader("Authorization") String authHeader) {
+    @DeleteMapping("/{orderId}")
+    public ResponseEntity<?> deleteOrder(
+            @RequestHeader("Authorization") String authHeader,
+            @PathVariable String orderId) {
 
-        userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT");
+        userTypeAccessGuard.enforceUserTypeForCurrentUser(
+                "RESTAURANT",
+                "INSTANT"
+        );
 
         String token = authHeader.substring(7).trim();
+
+        String hotelId = jwtUtil.extractHotelId(token);
+        String deletedById = jwtUtil.extractUserId(token);
         String role = jwtUtil.extractRole(token);
-        String hotelId = jwtUtil.extractHotelId(token); // hotel comes from the token, never from the request
 
-        if (role == null || !(role.equalsIgnoreCase("WAITER") || role.equalsIgnoreCase("ADMIN"))) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.FORBIDDEN,
-                    "Only WAITER or ADMIN can delete kitchen orders");
-        }
+        kitchenOrderingService.deleteOrder(
+                hotelId,
+                orderId,
+                deletedById,
+                role
+        );
 
-        kitchenOrderingService.deleteOrder(hotelId, orderId);
-        return ResponseEntity.ok("Order deleted");
+        return ResponseEntity.ok(
+                Map.of(
+                        "status", "SUCCESS",
+                        "message", "Order deleted successfully"
+                )
+        );
     }
 }

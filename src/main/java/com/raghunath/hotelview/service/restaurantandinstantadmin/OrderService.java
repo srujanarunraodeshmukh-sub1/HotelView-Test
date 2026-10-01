@@ -3,6 +3,7 @@ package com.raghunath.hotelview.service.restaurantandinstantadmin;
 import com.raghunath.hotelview.dto.restaurantandinstant.*;
 import com.raghunath.hotelview.entity.restaurantandinstant.*;
 import com.raghunath.hotelview.repository.restaurantandinstant.*;
+import com.raghunath.hotelview.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +43,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class OrderService {
 
+    private final JwtUtil jwtUtil;
     private final OrderDraftRepository draftRepository;
     private final AdminRepository adminRepository;
     private final TableRepository tableRepository;
@@ -1256,52 +1258,97 @@ public class OrderService {
             @CacheEvict(value = "orderCache", key = "#hotelId + '-today'")
     })
     @Transactional
-    public KitchenOrder acceptCustomerOrder(String hotelId, String customerOrderId, String staffId) {
+    public KitchenOrder acceptCustomerOrder(
+            String hotelId,
+            String customerOrderId,
+            String staffId,
+            String role) {
 
-        // 1. Fetch pending customer QR order from staging repository
+        // 1. Fetch pending customer QR order
         CustomerOrder cOrder = customerOrderRepository.findById(customerOrderId)
-                .orElseThrow(() -> new RuntimeException("Customer order not found with ID: " + customerOrderId));
-
-        if (!cOrder.getHotelId().equals(hotelId)) {
-            throw new RuntimeException("Unauthorized: Order does not belong to this hotel");
-        }
-
-        Employee employee = employeeRepository.findById(staffId)
                 .orElseThrow(() ->
                         new RuntimeException(
-                                "Employee not found with ID: " + staffId));
+                                "Customer order not found with ID: " + customerOrderId));
 
-        if (!employee.getHotelId().equals(hotelId)) {
+        if (!cOrder.getHotelId().equals(hotelId)) {
             throw new RuntimeException(
-                    "Unauthorized: Employee does not belong to this hotel");
+                    "Unauthorized: Order does not belong to this hotel");
         }
 
-        String staffName = employee.getName();
+        // 2. Find the person who accepted the order
+        String staffName;
 
-        // 2. Create KitchenOrder for Kitchen Display System (KDT)
+        if ("ADMIN".equalsIgnoreCase(role)) {
+
+            Admin admin = adminRepository.findById(staffId)
+                    .orElseThrow(() ->
+                            new RuntimeException(
+                                    "Admin not found with ID: " + staffId));
+
+            if (!admin.getHotelId().equals(hotelId)) {
+                throw new RuntimeException(
+                        "Unauthorized: Admin does not belong to this hotel");
+            }
+
+            staffName = admin.getName();
+
+        } else {
+
+            Employee employee = employeeRepository.findById(staffId)
+                    .orElseThrow(() ->
+                            new RuntimeException(
+                                    "Employee not found with ID: " + staffId));
+
+            if (!employee.getHotelId().equals(hotelId)) {
+                throw new RuntimeException(
+                        "Unauthorized: Employee does not belong to this hotel");
+            }
+
+            staffName = employee.getName();
+        }
+
+        // 3. Create KitchenOrder
         KitchenOrder kOrder = KitchenOrder.builder()
                 .hotelId(cOrder.getHotelId())
                 .tableName(cOrder.getTableName())
-                .orderType(StringUtils.hasText(cOrder.getOrderType()) ? cOrder.getOrderType() : "TABLE")
+                .orderType(
+                        StringUtils.hasText(cOrder.getOrderType())
+                                ? cOrder.getOrderType()
+                                : "TABLE"
+                )
                 .items(cOrder.getItems())
                 .totalAmount(cOrder.getTotalAmount())
-                .status("PENDING") // Pushed to kitchen
+                .status("PENDING")
                 .comments(cOrder.getComments())
-                // Store employee NAME instead of employee ID
+
+                // Actual name of person who accepted the order
                 .placedBy("CUSTOMER (Accepted by " + staffName + ")")
+
                 .createdDate(cOrder.getCreatedDate())
                 .createdTime(cOrder.getCreatedTime())
                 .build();
 
-        KitchenOrder savedKitchenOrder = kitchenOrderRepository.save(kOrder);
+        KitchenOrder savedKitchenOrder =
+                kitchenOrderRepository.save(kOrder);
 
-        // 3. Update Table Visual Status & Active Bill Balance
+        // 4. Update table status and bill
         if (StringUtils.hasText(cOrder.getTableName())) {
-            updateTableVisualStatus(hotelId, cOrder.getTableName(), "PENDING");
-            updateTableBill(hotelId, cOrder.getTableName(), cOrder.getTotalAmount(), false);
+
+            updateTableVisualStatus(
+                    hotelId,
+                    cOrder.getTableName(),
+                    "PENDING"
+            );
+
+            updateTableBill(
+                    hotelId,
+                    cOrder.getTableName(),
+                    cOrder.getTotalAmount(),
+                    false
+            );
         }
 
-        // 4. 🌟 CLEANUP: Remove from staging collection since it is now a standard live order
+        // 5. Remove staging order
         customerOrderRepository.delete(cOrder);
 
         versionService.bumpTables(hotelId);

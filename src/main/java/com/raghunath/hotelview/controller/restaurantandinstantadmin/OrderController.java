@@ -6,6 +6,7 @@ import com.raghunath.hotelview.entity.restaurantandinstant.OrderDraft;
 import com.raghunath.hotelview.repository.restaurantandinstant.KitchenOrderRepository;
 import com.raghunath.hotelview.security.JwtUtil;
 import com.raghunath.hotelview.security.UserTypeAccessGuard;
+import com.raghunath.hotelview.service.restaurantandinstantadmin.KitchenOrderingService;
 import com.raghunath.hotelview.service.restaurantandinstantadmin.OrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ public class OrderController {
     private final OrderService orderService;
     private final KitchenOrderRepository kitchenOrderRepository;
     private final MongoTemplate mongoTemplate;
+    private final KitchenOrderingService kitchenOrderingService;
     private final JwtUtil jwtUtil;
     private final UserTypeAccessGuard userTypeAccessGuard;
 
@@ -279,17 +281,22 @@ public class OrderController {
             @RequestHeader("Authorization") String authHeader,
             @Valid @RequestBody AcceptCustomerOrderRequest request) {
 
-        userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT", "INSTANT");
+        userTypeAccessGuard.enforceUserTypeForCurrentUser(
+                "RESTAURANT",
+                "INSTANT"
+        );
 
-        // Extract token payload properties cleanly
         String token = authHeader.substring(7).trim();
+
         String hotelId = jwtUtil.extractHotelId(token);
-        String staffId = jwtUtil.extractUserId(token); // Waiter/Admin ID from token
+        String staffId = jwtUtil.extractUserId(token);
+        String role = jwtUtil.extractRole(token);
 
         KitchenOrder kitchenOrder = orderService.acceptCustomerOrder(
                 hotelId,
                 request.getCustomerOrderId(),
-                staffId
+                staffId,
+                role
         );
 
         return ResponseEntity.ok(Map.of(
