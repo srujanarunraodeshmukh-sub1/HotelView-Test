@@ -1266,6 +1266,18 @@ public class OrderService {
             throw new RuntimeException("Unauthorized: Order does not belong to this hotel");
         }
 
+        Employee employee = employeeRepository.findById(staffId)
+                .orElseThrow(() ->
+                        new RuntimeException(
+                                "Employee not found with ID: " + staffId));
+
+        if (!employee.getHotelId().equals(hotelId)) {
+            throw new RuntimeException(
+                    "Unauthorized: Employee does not belong to this hotel");
+        }
+
+        String staffName = employee.getName();
+
         // 2. Create KitchenOrder for Kitchen Display System (KDT)
         KitchenOrder kOrder = KitchenOrder.builder()
                 .hotelId(cOrder.getHotelId())
@@ -1275,7 +1287,8 @@ public class OrderService {
                 .totalAmount(cOrder.getTotalAmount())
                 .status("PENDING") // Pushed to kitchen
                 .comments(cOrder.getComments())
-                .placedBy("CUSTOMER (Accepted by " + staffId + ")") // 🌟 Preserves audit trail in KitchenOrder
+                // Store employee NAME instead of employee ID
+                .placedBy("CUSTOMER (Accepted by " + staffName + ")")
                 .createdDate(cOrder.getCreatedDate())
                 .createdTime(cOrder.getCreatedTime())
                 .build();

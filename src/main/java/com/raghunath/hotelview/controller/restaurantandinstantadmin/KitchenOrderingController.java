@@ -72,4 +72,26 @@ public class KitchenOrderingController {
         String hotelId = userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT");
         return ResponseEntity.ok(kitchenOrderRepository.findByHotelIdAndStatus(hotelId, "COMPLETED"));
     }
+
+    // 10. DELETE KITCHEN ORDER (WAITER / ADMIN only, same hotel only)
+    @DeleteMapping("/kitchen/{orderId}")
+    public ResponseEntity<String> deleteOrder(
+            @PathVariable String orderId,
+            @RequestHeader("Authorization") String authHeader) {
+
+        userTypeAccessGuard.enforceUserTypeForCurrentUser("RESTAURANT");
+
+        String token = authHeader.substring(7).trim();
+        String role = jwtUtil.extractRole(token);
+        String hotelId = jwtUtil.extractHotelId(token); // hotel comes from the token, never from the request
+
+        if (role == null || !(role.equalsIgnoreCase("WAITER") || role.equalsIgnoreCase("ADMIN"))) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "Only WAITER or ADMIN can delete kitchen orders");
+        }
+
+        kitchenOrderingService.deleteOrder(hotelId, orderId);
+        return ResponseEntity.ok("Order deleted");
+    }
 }

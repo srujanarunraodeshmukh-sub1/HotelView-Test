@@ -81,6 +81,26 @@ public class KitchenOrderingService {
     }
 
     /**
+     * DELETE ORDER: Removes a kitchen order (scoped to the caller's hotel).
+     */
+    @Transactional
+    public void deleteOrder(String hotelId, String orderId) {
+        KitchenOrder order = kitchenOrderRepository.findById(orderId)
+                .orElseThrow(() -> new RuntimeException("Order not found"));
+
+        // Multi-tenant safety: never delete another hotel's order
+        if (!hotelId.equals(order.getHotelId())) {
+            throw new RuntimeException("Order not found");
+        }
+
+        kitchenOrderRepository.delete(order);
+        log.info("Order {} deleted for hotel {}", orderId, hotelId);
+
+        // Notify downstream apps so chef/kitchen screens refresh
+        versionService.bumpKitchen(hotelId);
+    }
+
+    /**
      * GENERAL STATUS UPDATE: Fallback for direct status modifications
      */
     @Transactional
