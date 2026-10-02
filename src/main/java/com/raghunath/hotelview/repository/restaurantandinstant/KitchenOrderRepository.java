@@ -14,6 +14,11 @@ public interface KitchenOrderRepository extends MongoRepository<KitchenOrder, St
     List<KitchenOrder> findByHotelIdAndTableNameAndStatusNotOrderByCreatedDateDescCreatedTimeDesc(
             String hotelId, String tableName, String status);
 
+    KitchenOrder findFirstByHotelIdAndTableNameOrderByCreatedDateDescCreatedTimeDesc(
+            String hotelId,
+            String tableName
+    );
+
     List<KitchenOrder> findByHotelIdAndStatus(String hotelId, String status);
 
     Long countByHotelIdAndOrderTypeAndStatus(String hotelId, String orderType, String status);

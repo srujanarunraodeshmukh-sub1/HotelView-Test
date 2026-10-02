@@ -1,12 +1,10 @@
 package com.raghunath.hotelview.service.restaurantandinstantadmin;
 
 import com.raghunath.hotelview.entity.restaurantandinstant.Admin;
+import com.raghunath.hotelview.entity.restaurantandinstant.CustomerOrder;
 import com.raghunath.hotelview.entity.restaurantandinstant.Employee;
 import com.raghunath.hotelview.entity.restaurantandinstant.KitchenOrder;
-import com.raghunath.hotelview.repository.restaurantandinstant.AdminRepository;
-import com.raghunath.hotelview.repository.restaurantandinstant.EmployeeRepository;
-import com.raghunath.hotelview.repository.restaurantandinstant.KitchenOrderRepository;
-import com.raghunath.hotelview.repository.restaurantandinstant.TableRepository;
+import com.raghunath.hotelview.repository.restaurantandinstant.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -17,7 +15,10 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.bson.Document;
+import org.springframework.util.StringUtils;
+
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Slf4j
 @Service
@@ -30,6 +31,7 @@ public class KitchenOrderingService {
     private final KitchenOrderRepository kitchenOrderRepository;
     private final VersionService versionService;
     private final TableRepository tableRepository;
+    private final CustomerOrderRepository customerOrderRepository;
 
     private static final ZoneId IST = ZoneId.of("Asia/Kolkata");
 
@@ -101,28 +103,44 @@ public class KitchenOrderingService {
             String deletedById,
             String role) {
 
-        // 1. Find the order
+        // =========================================================
+        // 1. FIND ORDER
+        // =========================================================
+
         KitchenOrder order = kitchenOrderRepository.findById(orderId)
                 .orElseThrow(() ->
                         new RuntimeException("Order not found"));
 
-        // 2. Multi-tenant safety
+        // =========================================================
+        // 2. MULTI-TENANT SAFETY
+        // =========================================================
+
         if (!hotelId.equals(order.getHotelId())) {
             throw new RuntimeException("Order not found");
         }
 
-        // 3. Find the name of the person deleting the order
+        String tableName = order.getTableName();
+
+        // Amount that will be removed from the table bill
+        double deletedOrderAmount =
+                order.getTotalAmount() != null
+                        ? order.getTotalAmount()
+                        : 0.0;
+
+        // =========================================================
+        // 3. FIND WHO DELETED THE ORDER
+        // =========================================================
+
         String deletedByName;
 
         if ("ADMIN".equalsIgnoreCase(role)) {
 
-            // ADMIN
             Admin admin = adminRepository.findById(deletedById)
                     .orElseThrow(() ->
                             new RuntimeException(
                                     "Admin not found with ID: " + deletedById));
 
-            // Make sure admin belongs to the same hotel
+            // Admin must belong to same hotel
             if (!hotelId.equals(admin.getHotelId())) {
                 throw new RuntimeException(
                         "Unauthorized: Admin does not belong to this hotel");
@@ -132,13 +150,12 @@ public class KitchenOrderingService {
 
         } else {
 
-            // EMPLOYEE
             Employee employee = employeeRepository.findById(deletedById)
                     .orElseThrow(() ->
                             new RuntimeException(
                                     "Employee not found with ID: " + deletedById));
 
-            // Make sure employee belongs to the same hotel
+            // Employee must belong to same hotel
             if (!hotelId.equals(employee.getHotelId())) {
                 throw new RuntimeException(
                         "Unauthorized: Employee does not belong to this hotel");
@@ -147,7 +164,10 @@ public class KitchenOrderingService {
             deletedByName = employee.getName();
         }
 
-        // 4. Convert KitchenOrder into MongoDB Document
+        // =========================================================
+        // 4. ARCHIVE ORDER INTO deleted_orders
+        // =========================================================
+
         Document deletedOrder = new Document();
 
         mongoTemplate.getConverter().write(
@@ -155,20 +175,173 @@ public class KitchenOrderingService {
                 deletedOrder
         );
 
-        // 5. Add deletion information
+        // Keep original order ID for audit/history
+        deletedOrder.put("originalOrderId", order.getId());
+
+        // Let deleted_orders get its own MongoDB _id
+        deletedOrder.remove("_id");
+
+        // Deletion information
         deletedOrder.put("deletedBy", deletedByName);
+        deletedOrder.put("deletedById", deletedById);
         deletedOrder.put("deletedAt", LocalDateTime.now());
 
-        // 6. Save complete order into deleted_orders collection
-        mongoTemplate.save(
+        // Save archive
+        mongoTemplate.insert(
                 deletedOrder,
                 "deleted_orders"
         );
 
-        // 7. Delete original order from kitchen_orders
+        // =========================================================
+        // 5. DELETE ORIGINAL KITCHEN ORDER
+        // =========================================================
+
         kitchenOrderRepository.delete(order);
 
-        // 8. Log deletion
+        // =========================================================
+        // 6. UPDATE TABLE BILL + STATUS
+        // =========================================================
+
+        if (StringUtils.hasText(tableName)) {
+
+            tableRepository.findByHotelIdAndTableName(
+                    hotelId,
+                    tableName
+            ).ifPresent(table -> {
+
+                // Current bill
+                double currentBill =
+                        table.getCurrentBill() != null
+                                ? table.getCurrentBill()
+                                : 0.0;
+
+                // Deduct deleted order amount
+                double newBill = Math.max(
+                        0.0,
+                        currentBill - deletedOrderAmount
+                );
+
+                table.setCurrentBill(newBill);
+
+                // =================================================
+                // CASE 1: BILL IS ZERO
+                // =================================================
+
+                if (newBill <= 0.0) {
+
+                    // Check if customer has another QR order
+                    List<CustomerOrder> pendingCustomerOrders =
+                            customerOrderRepository
+                                    .findByHotelIdAndTableNameAndStatus(
+                                            hotelId,
+                                            tableName,
+                                            "AWAITING"
+                                    );
+
+                    if (!pendingCustomerOrders.isEmpty()) {
+
+                        // Customer has placed another order
+                        table.setStatus("AWAITING");
+
+                        log.info(
+                                "TABLE_STATUS: Hotel {} Table {} -> AWAITING " +
+                                        "(pending customer order exists)",
+                                hotelId,
+                                tableName
+                        );
+
+                    } else {
+
+                        // No bill + no pending customer order
+                        table.setStatus("INACTIVE");
+
+                        log.info(
+                                "TABLE_STATUS: Hotel {} Table {} -> INACTIVE",
+                                hotelId,
+                                tableName
+                        );
+                    }
+
+                }
+
+                // =================================================
+                // CASE 2: BILL IS STILL GREATER THAN ZERO
+                // =================================================
+
+                else {
+
+                    // Find the latest remaining kitchen order
+                    KitchenOrder latestOrder =
+                            kitchenOrderRepository
+                                    .findFirstByHotelIdAndTableNameOrderByCreatedDateDescCreatedTimeDesc(
+                                            hotelId,
+                                            tableName
+                                    );
+
+                    if (latestOrder != null) {
+
+                        String latestOrderStatus =
+                                latestOrder.getStatus();
+
+                        String tableStatus =
+                                convertOrderStatusToTableStatus(
+                                        latestOrderStatus
+                                );
+
+                        table.setStatus(tableStatus);
+
+                        log.info(
+                                "TABLE_STATUS: Hotel {} Table {} -> {} " +
+                                        "(latest order {} status {})",
+                                hotelId,
+                                tableName,
+                                tableStatus,
+                                latestOrder.getId(),
+                                latestOrderStatus
+                        );
+
+                    } else {
+
+                        /*
+                         * This should normally not happen because
+                         * currentBill > 0 means some order should exist.
+                         *
+                         * But keep a safe fallback.
+                         */
+                        table.setStatus("INACTIVE");
+
+                        log.warn(
+                                "TABLE_STATUS: Bill is {} but no remaining " +
+                                        "kitchen order found for Hotel {} Table {}",
+                                newBill,
+                                hotelId,
+                                tableName
+                        );
+                    }
+                }
+
+                // Update timestamp
+                table.setUpdatedAt(LocalDateTime.now());
+
+                // Save table
+                tableRepository.save(table);
+
+                log.info(
+                        "BILL_SYNC: Hotel {} Table {} bill changed " +
+                                "from {} to {}. Final status: {}",
+                        hotelId,
+                        tableName,
+                        currentBill,
+                        newBill,
+                        table.getStatus()
+                );
+            });
+        }
+
+        // =========================================================
+        // 7. LOG DELETION
+        // =========================================================
+
         log.info(
                 "Order {} deleted by {} for hotel {}",
                 orderId,
@@ -176,8 +349,14 @@ public class KitchenOrderingService {
                 hotelId
         );
 
-        // 9. Notify kitchen screens
+        // =========================================================
+        // 8. NOTIFY KITCHEN SCREENS
+        // =========================================================
+
         versionService.bumpKitchen(hotelId);
+
+        // Also notify table/dashboard changes
+        versionService.bumpTables(hotelId);
     }
 
     /**
@@ -186,5 +365,28 @@ public class KitchenOrderingService {
     @Transactional
     public void updateOrderStatus(String orderId, String newStatus) {
         updateStatusWithChef(orderId, newStatus, null);
+    }
+
+
+    private String convertOrderStatusToTableStatus(String orderStatus) {
+
+        if (orderStatus == null) {
+            return "INACTIVE";
+        }
+
+        return switch (orderStatus.toUpperCase()) {
+
+            case "PENDING" ->
+                    "PENDING";
+
+            case "PREPARING" ->
+                    "ACCEPTED";
+
+            case "COMPLETED" ->
+                    "ACTIVE";
+
+            default ->
+                    "ACTIVE";
+        };
     }
 }

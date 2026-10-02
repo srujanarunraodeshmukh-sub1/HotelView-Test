@@ -11,6 +11,12 @@ public interface CustomerOrderRepository extends MongoRepository<CustomerOrder, 
     List<CustomerOrder> findByHotelIdAndTableNameAndStatusNotOrderByCreatedDateDescCreatedTimeDesc(
             String hotelId, String tableId, String status);
 
+    List<CustomerOrder> findByHotelIdAndTableNameAndStatus(
+            String hotelId,
+            String tableName,
+            String status
+    );
+
     List<CustomerOrder> findByHotelIdAndStatusOrderByCreatedDateDescCreatedTimeDesc(
             String hotelId, String status);
 }
