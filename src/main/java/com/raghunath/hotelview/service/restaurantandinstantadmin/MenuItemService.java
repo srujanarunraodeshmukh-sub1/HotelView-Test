@@ -224,10 +224,10 @@ public class MenuItemService {
     // WRITE: Soft deletes item & atomically clears affected hotel buckets
     // ====================================================================
     @Caching(evict = {
-            @CacheEvict(value = "menuSummaryCache", key = "#hotelIdFromToken"),
-            @CacheEvict(value = "menuCache", key = "#hotelIdFromToken"),
-            @CacheEvict(value = "menuCache", key = "'user_' + #hotelId"),
-            @CacheEvict(value = "dashboardStatsCache", key = "#hotelIdFromToken")
+            @CacheEvict(value = "menuSummaryCache", key = "#p0"),
+            @CacheEvict(value = "menuCache", key = "#p0"),
+            @CacheEvict(value = "menuCache", key = "'user_' + #p0"),
+            @CacheEvict(value = "dashboardStatsCache", key = "#p0")
     })
     public String softDeleteMenuItem(String hotelId, String itemId) {
         MenuItem existingItem = menuItemRepository.findByHotelIdAndId(hotelId, itemId)
