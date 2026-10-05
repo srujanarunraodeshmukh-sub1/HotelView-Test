@@ -56,7 +56,7 @@ public class EmployeeService {
             }
         } else if (plan.equalsIgnoreCase("Premium")) {
             if (targetRole.equals("WAITER") && currentWaiters >= 2) {
-                throw new RuntimeException("You have reached the maximum limit of 4 Waiters allowed on the Premium tier.");
+                throw new RuntimeException("You have reached the maximum limit of 2 Waiters allowed on the Premium tier.");
             }
             if (targetRole.equals("CHEF") && currentChefs >= 2) {
                 throw new RuntimeException("You have reached the maximum limit of 2 Chefs allowed on the Premium tier.");
