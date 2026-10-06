@@ -23,8 +23,8 @@ public class RateLimitingFilter extends OncePerRequestFilter {
 
     private final Map<String, Bucket> authCache = new ConcurrentHashMap<>();
     private final Map<String, Bucket> publicCache = new ConcurrentHashMap<>();
-    private final Map<String, Bucket> customerLoginCache = new ConcurrentHashMap<>(); // 🌟 NEW
-    private final Map<String, Bucket> nonStaffCache = new ConcurrentHashMap<>();      // 🌟 NEW
+    private final Map<String, Bucket> customerLoginCache = new ConcurrentHashMap<>();
+    private final Map<String, Bucket> nonStaffCache = new ConcurrentHashMap<>();
 
     private Bucket createAuthBucket() {
         return Bucket.builder()
@@ -71,7 +71,7 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         if (path.equals("/api/v1/user/auth/login")) {
             Bucket bucket = customerLoginCache.computeIfAbsent(ip, k -> createCustomerLoginBucket());
             if (!bucket.tryConsume(1)) {
-                sendTooManyRequestsResponse(response, "Too many login attempts. Please try again in a minute.");
+                sendTooManyRequestsResponse(response, "Too many login attempts. Please try again after some time.");
                 return;
             }
         }
@@ -79,7 +79,7 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         else if (path.contains("/login") || path.contains("/register") || path.contains("/refresh-token")) {
             Bucket bucket = authCache.computeIfAbsent(ip, k -> createAuthBucket());
             if (!bucket.tryConsume(1)) {
-                sendTooManyRequestsResponse(response, "Authentication threshold exceeded. Please try again in a minute.");
+                sendTooManyRequestsResponse(response, "Authentication threshold exceeded. Please try again after some time.");
                 return;
             }
         }
