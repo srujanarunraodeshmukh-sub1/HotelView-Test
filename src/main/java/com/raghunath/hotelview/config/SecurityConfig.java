@@ -104,6 +104,12 @@ public class SecurityConfig {
         AuthorizationManager<RequestAuthorizationContext> homeDeliveryStaffAccess =
                 requireRoleAndUserType(Set.of("ADMIN", "WAITER", "CHEF"), Set.of("RESTAURANT", "INSTANT"));
 
+        AuthorizationManager<RequestAuthorizationContext> instantAdminOrWaiter =
+                requireRoleAndUserType(
+                        Set.of("ADMIN", "WAITER"),
+                        Set.of("INSTANT")
+                );
+
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .csrf(csrf -> csrf.disable())
@@ -209,6 +215,8 @@ public class SecurityConfig {
 
                         // 8. ACCOUNT OPERATIONS
                         .requestMatchers("/api/v1/admin/logout", "/api/v1/employees/logout").authenticated()
+
+                        .requestMatchers("/api/v1/instant/credit-bills/**").access(instantAdminOrWaiter)
 
                         // 9. CATCH-ALL
                         .anyRequest().authenticated()
