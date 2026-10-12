@@ -79,18 +79,20 @@ public class InstantCreditBillController {
 
 
     @GetMapping("/customers/{customerId}")
-    public ResponseEntity<CreditCustomerDetailsResponse>
-    getCustomerDetails(
+    public ResponseEntity<CreditCustomerDetailsResponse> getCustomerDetails(
             @PathVariable String customerId
     ) {
         String hotelId = getHotelId();
 
-        return ResponseEntity.ok(
+        userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
+
+        CreditCustomerDetailsResponse response =
                 creditBillService.getCustomerDetails(
                         hotelId,
                         customerId
-                )
-        );
+                );
+
+        return ResponseEntity.ok(response);
     }
 
 

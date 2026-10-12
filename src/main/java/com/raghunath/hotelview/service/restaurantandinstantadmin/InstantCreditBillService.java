@@ -395,6 +395,7 @@ public class InstantCreditBillService {
     // ============================================================
 
 
+
     public CreditCustomerDetailsResponse getCustomerDetails(
             String hotelId,
             String customerId
@@ -414,43 +415,76 @@ public class InstantCreditBillService {
         response.setAddress(customer.getAddress());
 
         response.setActiveBillCount(activeBills.size());
+        response.setTotalPendingAmount(calculateTotalPending(customer));
 
-        response.setTotalPendingAmount(
-                calculateTotalPending(customer)
-        );
+        // Result array: active bills first, followed by payment transactions.
+        List<Object> results = new ArrayList<>();
 
-        response.setActiveBills(
-                activeBills.stream()
-                        .map(entry -> toBillResponse(
-                                customer.getId(),
-                                entry.getBill()
-                        ))
-                        .collect(Collectors.toList())
-        );
+        // 1. Add active bills.
+        activeBills.stream()
+                .map(entry -> toBillResponse(
+                        customer.getId(),
+                        entry.getBill()
+                ))
+                .forEach(results::add);
 
-        List<CreditHistoryResponse> transactions =
-                customer.getCreditEntries() == null
-                        ? new ArrayList<>()
-                        : customer.getCreditEntries().stream()
-                        .sorted(Comparator.comparing(
-                                InstantCreditCustomer.CreditEntry
-                                        ::getSequenceNumber,
-                                Comparator.nullsLast(
-                                        Comparator.naturalOrder()
-                                )
-                        ))
-                        .map(entry -> toHistoryResponse(
-                                entry,
-                                customer.getId()
-                        ))
-                        .collect(Collectors.toList());
+        // 2. Collect payment transactions without duplicates.
+        Set<String> addedPaymentEntryIds = new HashSet<>();
 
-        response.setTransactions(transactions);
+        // Search the customer's current ledger.
+        if (customer.getCreditEntries() != null) {
+            customer.getCreditEntries().stream()
+                    .filter(entry ->
+                            entry.getEntryType()
+                                    == InstantCreditCustomer.EntryType.RECEIVE_PAYMENT
+                    )
+                    .sorted(Comparator.comparing(
+                            InstantCreditCustomer.CreditEntry::getSequenceNumber,
+                            Comparator.nullsLast(Comparator.naturalOrder())
+                    ))
+                    .filter(entry ->
+                            addedPaymentEntryIds.add(entry.getEntryId())
+                    )
+                    .map(entry -> toHistoryResponse(
+                            entry,
+                            customer.getId()
+                    ))
+                    .forEach(results::add);
+        }
+
+        // Search the completed history ledger.
+        Optional<InstantCreditCompletedBills> history =
+                completedBillsRepository.findByHotelIdAndCustomerId(
+                        hotelId,
+                        customerId
+                );
+
+        if (history.isPresent()
+                && history.get().getCompletedEntries() != null) {
+
+            history.get().getCompletedEntries().stream()
+                    .filter(entry ->
+                            "RECEIVE_PAYMENT".equals(entry.getEntryType())
+                    )
+                    .sorted(Comparator.comparing(
+                            InstantCreditCustomer.CreditEntry::getSequenceNumber,
+                            Comparator.nullsLast(Comparator.naturalOrder())
+                    ))
+                    .filter(entry ->
+                            addedPaymentEntryIds.add(entry.getEntryId())
+                    )
+                    .map(entry -> toHistoryResponse(
+                            entry,
+                            customer.getId()
+                    ))
+                    .forEach(results::add);
+        }
+
+        // Return bills and payment transactions in the same array.
+        response.setActiveBills(results);
 
         return response;
     }
-
-
 
     // ============================================================
     // GET PENDING TRANSACTIONS

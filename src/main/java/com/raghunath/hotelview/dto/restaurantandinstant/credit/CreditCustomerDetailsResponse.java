@@ -18,9 +18,5 @@ public class CreditCustomerDetailsResponse {
     private int activeBillCount;
     private double totalPendingAmount;
 
-    private List<CreditBillResponse> activeBills =
-            new ArrayList<>();
-
-    private List<CreditHistoryResponse> transactions =
-            new ArrayList<>();
+    private List<Object> activeBills = new ArrayList<>();
 }
