@@ -22,4 +22,6 @@ public interface InstantCreditCustomerRepository
     List<InstantCreditCustomer> findByHotelIdAndActiveTrueOrderByNameAsc(
             String hotelId
     );
+
+    List<InstantCreditCustomer> findByHotelIdOrderByNameAsc(String hotelId);
 }

@@ -1,15 +1,6 @@
 package com.raghunath.hotelview.service.restaurantandinstantadmin;
 
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.CommodityRequest;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.CommodityResponse;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreateCreditBillRequest;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditBillResponse;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerResponse;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditHistoryResponse;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.EditCreditBillRequest;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.PendingTransactionResponse;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.ReceivePaymentRequest;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.ReceivePaymentResponse;
+import com.raghunath.hotelview.dto.restaurantandinstant.credit.*;
 import com.raghunath.hotelview.entity.restaurantandinstant.InstantCreditCompletedBills;
 import com.raghunath.hotelview.entity.restaurantandinstant.InstantCreditCustomer;
 import com.raghunath.hotelview.repository.restaurantandinstant.InstantCreditCompletedBillsRepository;
@@ -365,65 +356,31 @@ public class InstantCreditBillService {
     // GET ACTIVE CUSTOMERS
     // ============================================================
 
+
     public List<CreditCustomerResponse> getActiveCustomers(
             String hotelId
     ) {
-
         List<InstantCreditCustomer> customers =
-                customerRepository
-                        .findByHotelIdAndActiveTrueOrderByNameAsc(
-                                hotelId
-                        );
+                customerRepository.findByHotelIdOrderByNameAsc(hotelId);
 
-        List<CreditCustomerResponse> response =
-                new ArrayList<>();
+        List<CreditCustomerResponse> response = new ArrayList<>();
 
-        for (InstantCreditCustomer customer :
-                customers) {
-
-            List<InstantCreditCustomer.CreditEntry>
-                    activeBills =
+        for (InstantCreditCustomer customer : customers) {
+            List<InstantCreditCustomer.CreditEntry> activeBills =
                     getActiveBillEntries(customer);
 
-            if (activeBills.isEmpty()) {
-                continue;
-            }
+            CreditCustomerResponse dto = new CreditCustomerResponse();
 
-            double totalPending =
-                    money(
-                            activeBills.stream()
-                                    .mapToDouble(
-                                            e -> e.getBill()
-                                                    .getPendingAmount()
-                                    )
-                                    .sum()
-                    );
-
-            CreditCustomerResponse dto =
-                    new CreditCustomerResponse();
-
-            dto.setCustomerId(
-                    customer.getId()
-            );
-
-            dto.setName(
-                    customer.getName()
-            );
-
-            dto.setMobile(
-                    customer.getMobile()
-            );
-
-            dto.setAddress(
-                    customer.getAddress()
-            );
-
-            dto.setActiveBillCount(
-                    activeBills.size()
-            );
+            dto.setCustomerId(customer.getId());
+            dto.setName(customer.getName());
+            dto.setMobile(customer.getMobile());
+            dto.setAddress(customer.getAddress());
+            dto.setActiveBillCount(activeBills.size());
 
             dto.setTotalPendingAmount(
-                    totalPending
+                    money(activeBills.stream()
+                            .mapToDouble(e -> e.getBill().getPendingAmount())
+                            .sum())
             );
 
             response.add(dto);
@@ -437,27 +394,62 @@ public class InstantCreditBillService {
     // GET CUSTOMER ACTIVE BILLS
     // ============================================================
 
-    public List<CreditBillResponse> getCustomerActiveBills(
+
+    public CreditCustomerDetailsResponse getCustomerDetails(
             String hotelId,
             String customerId
     ) {
-
         InstantCreditCustomer customer =
-                validateCustomer(
-                        hotelId,
-                        customerId
-                );
+                validateCustomer(hotelId, customerId);
 
-        return getActiveBillEntries(customer)
-                .stream()
-                .map(entry ->
-                        toBillResponse(
+        List<InstantCreditCustomer.CreditEntry> activeBills =
+                getActiveBillEntries(customer);
+
+        CreditCustomerDetailsResponse response =
+                new CreditCustomerDetailsResponse();
+
+        response.setCustomerId(customer.getId());
+        response.setName(customer.getName());
+        response.setMobile(customer.getMobile());
+        response.setAddress(customer.getAddress());
+
+        response.setActiveBillCount(activeBills.size());
+
+        response.setTotalPendingAmount(
+                calculateTotalPending(customer)
+        );
+
+        response.setActiveBills(
+                activeBills.stream()
+                        .map(entry -> toBillResponse(
                                 customer.getId(),
                                 entry.getBill()
-                        )
-                )
-                .collect(Collectors.toList());
+                        ))
+                        .collect(Collectors.toList())
+        );
+
+        List<CreditHistoryResponse> transactions =
+                customer.getCreditEntries() == null
+                        ? new ArrayList<>()
+                        : customer.getCreditEntries().stream()
+                        .sorted(Comparator.comparing(
+                                InstantCreditCustomer.CreditEntry
+                                        ::getSequenceNumber,
+                                Comparator.nullsLast(
+                                        Comparator.naturalOrder()
+                                )
+                        ))
+                        .map(entry -> toHistoryResponse(
+                                entry,
+                                customer.getId()
+                        ))
+                        .collect(Collectors.toList());
+
+        response.setTransactions(transactions);
+
+        return response;
     }
+
 
 
     // ============================================================

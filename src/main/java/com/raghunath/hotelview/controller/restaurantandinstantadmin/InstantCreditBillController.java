@@ -1,13 +1,6 @@
 package com.raghunath.hotelview.controller.restaurantandinstantadmin;
 
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreateCreditBillRequest;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditBillResponse;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerResponse;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditHistoryResponse;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.EditCreditBillRequest;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.PendingTransactionResponse;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.ReceivePaymentRequest;
-import com.raghunath.hotelview.dto.restaurantandinstant.credit.ReceivePaymentResponse;
+import com.raghunath.hotelview.dto.restaurantandinstant.credit.*;
 import com.raghunath.hotelview.security.UserTypeAccessGuard;
 import com.raghunath.hotelview.service.restaurantandinstantadmin.InstantCreditBillService;
 import jakarta.validation.Valid;
@@ -84,21 +77,22 @@ public class InstantCreditBillController {
     // 3. CUSTOMER ACTIVE BILLS
     // =========================================================
 
+
     @GetMapping("/customers/{customerId}")
-    public ResponseEntity<List<CreditBillResponse>>
-    getCustomerActiveBills(
+    public ResponseEntity<CreditCustomerDetailsResponse>
+    getCustomerDetails(
             @PathVariable String customerId
     ) {
-
         String hotelId = getHotelId();
 
         return ResponseEntity.ok(
-                creditBillService.getCustomerActiveBills(
+                creditBillService.getCustomerDetails(
                         hotelId,
                         customerId
                 )
         );
     }
+
 
 
     // =========================================================
