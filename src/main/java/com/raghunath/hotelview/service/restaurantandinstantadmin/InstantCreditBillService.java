@@ -25,6 +25,17 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerChangesResponse;
+import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerPageResponse;
+import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerResponse;
+import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerVersionResponse;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 @Service
 @RequiredArgsConstructor
@@ -35,6 +46,173 @@ public class InstantCreditBillService {
 
     private final InstantCreditCompletedBillsRepository
             completedBillsRepository;
+
+    private static final DateTimeFormatter SYNC_TIMESTAMP_FORMAT =
+            DateTimeFormatter.ISO_LOCAL_DATE_TIME;
+
+
+// ============================================================
+// GET CUSTOMER VERSION AND COUNT
+// ============================================================
+
+    public CreditCustomerVersionResponse getCustomerVersion(
+            String hotelId
+    ) {
+        long totalCount =
+                customerRepository.countByHotelId(hotelId);
+
+        LocalDateTime latestUpdatedAt =
+                customerRepository
+                        .findTopByHotelIdOrderByUpdatedAtDescIdDesc(hotelId)
+                        .map(InstantCreditCustomer::getUpdatedAt)
+                        .orElse(LocalDateTime.of(
+                                1970, 1, 1, 0, 0
+                        ));
+
+        return new CreditCustomerVersionResponse(
+                latestUpdatedAt.format(SYNC_TIMESTAMP_FORMAT),
+                totalCount
+        );
+    }
+
+
+// ============================================================
+// GET CUSTOMERS CHANGED SINCE TIMESTAMP
+// ============================================================
+
+    public CreditCustomerChangesResponse getCustomerChanges(
+            String hotelId,
+            String afterVersion
+    ) {
+        LocalDateTime from;
+
+        try {
+            from = LocalDateTime.parse(
+                    afterVersion,
+                    SYNC_TIMESTAMP_FORMAT
+            );
+        } catch (Exception ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid afterVersion. Use ISO date-time format, e.g. 2026-10-12T20:15:30"
+            );
+        }
+
+        CreditCustomerVersionResponse currentVersion =
+                getCustomerVersion(hotelId);
+
+        LocalDateTime to = LocalDateTime.parse(
+                currentVersion.getVersion(),
+                SYNC_TIMESTAMP_FORMAT
+        );
+
+        List<InstantCreditCustomer> changedCustomers =
+                customerRepository.findChangedCustomersBetween(
+                        hotelId,
+                        from,
+                        to
+                );
+
+        List<CreditCustomerResponse> customers =
+                changedCustomers.stream()
+                        .map(this::toCustomerListResponse)
+                        .collect(Collectors.toList());
+
+        return new CreditCustomerChangesResponse(
+                currentVersion.getVersion(),
+                customers
+        );
+    }
+
+
+// ============================================================
+// GET CUSTOMERS WITH PAGINATION
+// ============================================================
+
+    public CreditCustomerPageResponse getCustomerPage(
+            String hotelId,
+            int page,
+            int size
+    ) {
+        if (page < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Page cannot be negative"
+            );
+        }
+
+        if (size < 1 || size > 100) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Page size must be between 1 and 100"
+            );
+        }
+
+        Page<InstantCreditCustomer> customerPage =
+                customerRepository.findByHotelId(
+                        hotelId,
+                        PageRequest.of(
+                                page,
+                                size,
+                                Sort.by(
+                                        Sort.Order.desc("createdAt"),
+                                        Sort.Order.desc("id")
+                                )
+                        )
+                );
+
+        List<CreditCustomerResponse> customers =
+                customerPage.getContent()
+                        .stream()
+                        .map(this::toCustomerListResponse)
+                        .collect(Collectors.toList());
+
+        CreditCustomerVersionResponse currentVersion =
+                getCustomerVersion(hotelId);
+
+        return new CreditCustomerPageResponse(
+                currentVersion.getVersion(),
+                customerPage.getTotalElements(),
+                page,
+                size,
+                customerPage.hasNext(),
+                customers
+        );
+    }
+
+
+// ============================================================
+// MAP CUSTOMER TO LIST RESPONSE
+// ============================================================
+
+    private CreditCustomerResponse toCustomerListResponse(
+            InstantCreditCustomer customer
+    ) {
+        List<InstantCreditCustomer.CreditEntry> activeBills =
+                getActiveBillEntries(customer);
+
+        CreditCustomerResponse response =
+                new CreditCustomerResponse();
+
+        response.setCustomerId(customer.getId());
+        response.setName(customer.getName());
+        response.setMobile(customer.getMobile());
+        response.setAddress(customer.getAddress());
+
+        response.setActiveBillCount(activeBills.size());
+
+        response.setTotalPendingAmount(
+                money(
+                        activeBills.stream()
+                                .mapToDouble(entry ->
+                                        entry.getBill().getPendingAmount()
+                                )
+                                .sum()
+                )
+        );
+
+        return response;
+    }
 
 
     // ============================================================

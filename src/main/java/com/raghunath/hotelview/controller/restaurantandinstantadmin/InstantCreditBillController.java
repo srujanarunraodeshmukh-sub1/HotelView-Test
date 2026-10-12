@@ -10,6 +10,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerChangesResponse;
+import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerPageResponse;
+import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerVersionResponse;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 
 @RestController
 @RequestMapping("/api/v1/instant/credit-bills")
@@ -31,6 +38,75 @@ public class InstantCreditBillController {
                 .enforceUserTypeForCurrentUser(
                         "INSTANT"
                 );
+    }
+
+    // ============================================================
+    // API 1: CUSTOMER VERSION AND COUNT
+    // GET /api/v1/instant/credit-bills/customers/version
+    // ============================================================
+
+    @GetMapping("/customers/version")
+    public ResponseEntity<CreditCustomerVersionResponse>
+    getCustomerVersion() {
+
+        String hotelId = getHotelId();
+
+        userTypeAccessGuard
+                .enforceUserTypeForCurrentUser("INSTANT");
+
+        return ResponseEntity.ok(
+                creditBillService.getCustomerVersion(hotelId)
+        );
+    }
+
+
+    // ============================================================
+    // API 2: CUSTOMERS CHANGED AFTER TIMESTAMP
+    // GET /api/v1/instant/credit-bills/customers/changes
+    // ============================================================
+
+    @GetMapping("/customers/changes")
+    public ResponseEntity<CreditCustomerChangesResponse>
+    getCustomerChanges(
+            @RequestParam String afterVersion
+    ) {
+        String hotelId = getHotelId();
+
+        userTypeAccessGuard
+                .enforceUserTypeForCurrentUser("INSTANT");
+
+        return ResponseEntity.ok(
+                creditBillService.getCustomerChanges(
+                        hotelId,
+                        afterVersion
+                )
+        );
+    }
+
+
+    // ============================================================
+    // API 3: PAGINATED CUSTOMERS
+    // GET /api/v1/instant/credit-bills/customers/page
+    // ============================================================
+
+    @GetMapping("/customers/page")
+    public ResponseEntity<CreditCustomerPageResponse>
+    getCustomerPage(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        String hotelId = getHotelId();
+
+        userTypeAccessGuard
+                .enforceUserTypeForCurrentUser("INSTANT");
+
+        return ResponseEntity.ok(
+                creditBillService.getCustomerPage(
+                        hotelId,
+                        page,
+                        size
+                )
+        );
     }
 
 
