@@ -219,6 +219,7 @@ public class InstantCreditBillService {
     // CREATE CREDIT BILL
     // ============================================================
 
+
     public CreditBillResponse createCreditBill(
             String hotelId,
             CreateCreditBillRequest request
@@ -234,14 +235,45 @@ public class InstantCreditBillService {
                 "Paid amount"
         );
 
+        // Read GST values provided by frontend.
+        double grossTotal =
+                request.getGrossTotal() == null
+                        ? 0.0
+                        : money(request.getGrossTotal());
+
+        double cgst =
+                request.getCgst() == null
+                        ? 0.0
+                        : request.getCgst();
+
+        double sgst =
+                request.getSgst() == null
+                        ? 0.0
+                        : request.getSgst();
+
         double totalAmount =
                 money(request.getTotalAmount());
 
         double paidAmount =
                 money(request.getPaidAmount());
 
-        if (paidAmount > totalAmount) {
+        // Validate gross total.
+        if (grossTotal < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Gross total cannot be negative"
+            );
+        }
 
+        // Validate GST rates.
+        if (cgst < 0 || cgst > 100 || sgst < 0 || sgst > 100) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "CGST and SGST must be between 0 and 100"
+            );
+        }
+
+        if (paidAmount > totalAmount) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Paid amount cannot be greater than total amount"
@@ -382,7 +414,6 @@ public class InstantCreditBillService {
         }
 
         if (customer.getLastSequenceNumber() == null) {
-
             customer.setLastSequenceNumber(0L);
         }
 
@@ -425,6 +456,19 @@ public class InstantCreditBillService {
         bill.setCreatedAt(now);
 
         bill.setUpdatedAt(now);
+
+        // Save frontend-provided GST amounts and rates.
+        bill.setGrossTotal(
+                grossTotal
+        );
+
+        bill.setCgst(
+                cgst
+        );
+
+        bill.setSgst(
+                sgst
+        );
 
         bill.setTotalAmount(
                 totalAmount
@@ -528,6 +572,7 @@ public class InstantCreditBillService {
                 bill
         );
     }
+
 
 
     // ============================================================
@@ -1187,6 +1232,30 @@ public class InstantCreditBillService {
                         request.getPaidAmount()
                 );
 
+        // --------------------------------------------------------
+        // Validate frontend-provided GST values
+        // --------------------------------------------------------
+
+        Double grossTotal = request.getGrossTotal();
+        Double cgst = request.getCgst();
+        Double sgst = request.getSgst();
+
+        if (grossTotal != null && grossTotal < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Gross total cannot be negative"
+            );
+        }
+
+        if ((cgst != null && (cgst < 0 || cgst > 100))
+                || (sgst != null && (sgst < 0 || sgst > 100))) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "CGST and SGST must be between 0 and 100"
+            );
+        }
+
         if (paidAmount > totalAmount) {
 
             throw new ResponseStatusException(
@@ -1292,6 +1361,25 @@ public class InstantCreditBillService {
         // --------------------------------------------------------
         // Update bill
         // --------------------------------------------------------
+
+        // Update GST fields only when supplied by the frontend.
+        if (request.getGrossTotal() != null) {
+            bill.setGrossTotal(
+                    money(request.getGrossTotal())
+            );
+        }
+
+        if (request.getCgst() != null) {
+            bill.setCgst(
+                    request.getCgst()
+            );
+        }
+
+        if (request.getSgst() != null) {
+            bill.setSgst(
+                    request.getSgst()
+            );
+        }
 
         double pendingAmount =
                 money(
@@ -2143,6 +2231,7 @@ public class InstantCreditBillService {
     // BUILD COMMODITIES
     // ============================================================
 
+
     private List<InstantCreditCustomer.CreditCommodity>
     buildCommodities(
             List<CommodityRequest> requests
@@ -2179,6 +2268,20 @@ public class InstantCreditBillService {
                 );
             }
 
+            // ADDED: Read and validate item-level GST.
+            double itemGst =
+                    request.getItemGst() == null
+                            ? 0.0
+                            : request.getItemGst();
+
+            if (itemGst < 0 || itemGst > 100) {
+
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Item GST must be between 0 and 100"
+                );
+            }
+
             double subtotal =
                     money(
                             request.getRate()
@@ -2212,6 +2315,11 @@ public class InstantCreditBillService {
                     subtotal
             );
 
+            // ADDED: Store item-level GST without recalculating totals.
+            commodity.setItemGst(
+                    itemGst
+            );
+
             commodities.add(
                     commodity
             );
@@ -2221,9 +2329,11 @@ public class InstantCreditBillService {
     }
 
 
+
     // ============================================================
     // BILL RESPONSE
     // ============================================================
+
 
     private CreditBillResponse toBillResponse(
             String customerId,
@@ -2251,6 +2361,21 @@ public class InstantCreditBillService {
 
         response.setUpdatedAt(
                 bill.getUpdatedAt()
+        );
+
+        // GST details
+        response.setGrossTotal(
+                money(
+                        bill.getGrossTotal()
+                )
+        );
+
+        response.setCgst(
+                bill.getCgst()
+        );
+
+        response.setSgst(
+                bill.getSgst()
         );
 
         response.setTotalAmount(
@@ -2315,6 +2440,11 @@ public class InstantCreditBillService {
                         )
                 );
 
+                // Item-level GST
+                dto.setItemGst(
+                        commodity.getItemGst()
+                );
+
                 commodities.add(dto);
             }
         }
@@ -2337,6 +2467,7 @@ public class InstantCreditBillService {
 
         return response;
     }
+
 
 
     // ============================================================

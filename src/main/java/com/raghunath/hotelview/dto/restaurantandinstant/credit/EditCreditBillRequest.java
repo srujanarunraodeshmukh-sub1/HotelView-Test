@@ -20,6 +20,16 @@ public class EditCreditBillRequest {
     @PositiveOrZero(message = "Paid amount cannot be negative")
     private Double paidAmount;
 
+    // GST fields
+    @PositiveOrZero(message = "Gross total cannot be negative")
+    private Double grossTotal;
+
+    @PositiveOrZero(message = "CGST cannot be negative")
+    private Double cgst;
+
+    @PositiveOrZero(message = "SGST cannot be negative")
+    private Double sgst;
+
     private String editReason;
 
     @Valid

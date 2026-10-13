@@ -41,4 +41,8 @@ public class CreateCreditBillRequest {
 
     @Valid
     private List<CommodityRequest> commodities;
+
+    private Double grossTotal;
+    private Double cgst = 0.0;
+    private Double sgst = 0.0;
 }

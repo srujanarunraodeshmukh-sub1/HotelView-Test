@@ -13,6 +13,8 @@ public class CommodityResponse {
 
     private double rate;
 
+    private double itemGst;
+
     private double quantity;
 
     private String unit;

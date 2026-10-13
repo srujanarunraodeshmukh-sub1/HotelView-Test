@@ -20,6 +20,8 @@ public class CommodityRequest {
     @PositiveOrZero(message = "Rate cannot be negative")
     private Double rate;
 
+    private Double itemGst = 0.0;
+
     @NotNull(message = "Quantity is required")
     @Positive(message = "Quantity must be greater than zero")
     private Double quantity;

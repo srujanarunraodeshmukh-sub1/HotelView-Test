@@ -23,6 +23,10 @@ public class CreditBillResponse {
 
     private LocalDateTime updatedAt;
 
+    private double grossTotal;
+    private double cgst;
+    private double sgst;
+
     private double totalAmount;
 
     private double paidAmount;

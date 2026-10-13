@@ -121,6 +121,10 @@ public class InstantCreditCustomer {
 
         private LocalDateTime updatedAt;
 
+        private double grossTotal;
+        private double cgst;
+        private double sgst;
+
         private double totalAmount;
 
         private double paidAmount;
@@ -155,6 +159,8 @@ public class InstantCreditCustomer {
         private double rate;
 
         private double quantity;
+
+        private double itemGst;
 
         private String unit;
 
