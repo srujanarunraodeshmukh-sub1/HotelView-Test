@@ -256,6 +256,26 @@ public class InstantCreditBillController {
     }
 
 
+    @PostMapping("/{billId}/settle")
+    public ResponseEntity<ReceivePaymentResponse> settleSpecificBill(
+            @PathVariable String billId,
+            @RequestBody ReceivePaymentRequest request
+    ) {
+        userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
+
+        String hotelId = getHotelId();
+
+        return ResponseEntity.ok(
+                creditBillService.settleSpecificBill(
+                        hotelId,
+                        billId,
+                        request
+                )
+        );
+    }
+
+
+
     // =========================================================
     // 8. ALL HISTORY
     // =========================================================

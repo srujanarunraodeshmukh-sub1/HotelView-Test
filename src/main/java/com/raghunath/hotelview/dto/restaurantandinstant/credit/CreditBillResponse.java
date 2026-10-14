@@ -8,6 +8,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Getter
 @Setter
@@ -24,8 +25,7 @@ public class CreditBillResponse {
     private LocalDateTime updatedAt;
 
     private double grossTotal;
-    private double cgst;
-    private double sgst;
+    private Map<String, Double> gstDetails;
 
     private double totalAmount;
 

@@ -8,6 +8,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.util.List;
+import java.util.Map;
 
 @Getter
 @Setter
@@ -43,6 +44,5 @@ public class CreateCreditBillRequest {
     private List<CommodityRequest> commodities;
 
     private Double grossTotal;
-    private Double cgst = 0.0;
-    private Double sgst = 0.0;
+    private Map<String, Double> gstDetails;
 }

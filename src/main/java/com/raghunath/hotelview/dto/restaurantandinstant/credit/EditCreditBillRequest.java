@@ -7,6 +7,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.util.List;
+import java.util.Map;
 
 @Getter
 @Setter
@@ -17,18 +18,14 @@ public class EditCreditBillRequest {
     private Double totalAmount;
 
     @NotNull(message = "Paid amount is required")
-    @PositiveOrZero(message = "Paid amount cannot be negative")
+    @PositiveOrZero(message = "Paid amount0 cannot be negative")
     private Double paidAmount;
 
     // GST fields
     @PositiveOrZero(message = "Gross total cannot be negative")
     private Double grossTotal;
 
-    @PositiveOrZero(message = "CGST cannot be negative")
-    private Double cgst;
-
-    @PositiveOrZero(message = "SGST cannot be negative")
-    private Double sgst;
+    private Map<String, Double> gstDetails;
 
     private String editReason;
 

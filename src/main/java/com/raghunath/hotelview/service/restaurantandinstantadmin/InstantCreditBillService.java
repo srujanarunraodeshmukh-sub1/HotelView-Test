@@ -17,13 +17,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.stream.Collectors;
 import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerChangesResponse;
 import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerPageResponse;
@@ -236,23 +230,21 @@ public class InstantCreditBillService {
         );
 
         // Read GST values provided by frontend.
+
+        // Read GST values provided by frontend.
         double grossTotal =
                 request.getGrossTotal() == null
                         ? 0.0
                         : money(request.getGrossTotal());
 
-        double cgst =
-                request.getCgst() == null
-                        ? 0.0
-                        : request.getCgst();
-
-        double sgst =
-                request.getSgst() == null
-                        ? 0.0
-                        : request.getSgst();
+        Map<String, Double> gstDetails =
+                request.getGstDetails() != null
+                        ? new HashMap<>(request.getGstDetails())
+                        : new HashMap<>();
 
         double totalAmount =
                 money(request.getTotalAmount());
+
 
         double paidAmount =
                 money(request.getPaidAmount());
@@ -265,13 +257,33 @@ public class InstantCreditBillService {
             );
         }
 
+
         // Validate GST rates.
-        if (cgst < 0 || cgst > 100 || sgst < 0 || sgst > 100) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "CGST and SGST must be between 0 and 100"
-            );
+        if (gstDetails != null) {
+            for (Map.Entry<String, Double> gstEntry : gstDetails.entrySet()) {
+
+                String gstName = gstEntry.getKey();
+                Double percentage = gstEntry.getValue();
+
+                if (gstName == null || gstName.isBlank()) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "GST name cannot be empty"
+                    );
+                }
+
+                if (percentage == null
+                        || percentage < 0
+                        || percentage > 100) {
+
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            gstName + " must be between 0 and 100"
+                    );
+                }
+            }
         }
+
 
         if (paidAmount > totalAmount) {
             throw new ResponseStatusException(
@@ -458,16 +470,12 @@ public class InstantCreditBillService {
         bill.setUpdatedAt(now);
 
         // Save frontend-provided GST amounts and rates.
-        bill.setGrossTotal(
-                grossTotal
-        );
+        bill.setGrossTotal(grossTotal);
 
-        bill.setCgst(
-                cgst
-        );
-
-        bill.setSgst(
-                sgst
+        bill.setGstDetails(
+                request.getGstDetails() != null
+                        ? new HashMap<>(request.getGstDetails())
+                        : new HashMap<>()
         );
 
         bill.setTotalAmount(
@@ -1232,13 +1240,15 @@ public class InstantCreditBillService {
                         request.getPaidAmount()
                 );
 
-        // --------------------------------------------------------
-        // Validate frontend-provided GST values
-        // --------------------------------------------------------
+
+        /*
+         * Validate frontend-provided GST values.
+         * GST percentages are stored as supplied by the frontend.
+         * The backend does not calculate GST amounts.
+         */
 
         Double grossTotal = request.getGrossTotal();
-        Double cgst = request.getCgst();
-        Double sgst = request.getSgst();
+        Map<String, Double> gstDetails = request.getGstDetails();
 
         if (grossTotal != null && grossTotal < 0) {
             throw new ResponseStatusException(
@@ -1247,13 +1257,29 @@ public class InstantCreditBillService {
             );
         }
 
-        if ((cgst != null && (cgst < 0 || cgst > 100))
-                || (sgst != null && (sgst < 0 || sgst > 100))) {
+        if (gstDetails != null) {
+            for (Map.Entry<String, Double> gstEntry : gstDetails.entrySet()) {
 
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "CGST and SGST must be between 0 and 100"
-            );
+                String gstName = gstEntry.getKey();
+                Double percentage = gstEntry.getValue();
+
+                if (gstName == null || gstName.isBlank()) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "GST name cannot be empty"
+                    );
+                }
+
+                if (percentage == null
+                        || percentage < 0
+                        || percentage > 100) {
+
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            gstName + " must be between 0 and 100"
+                    );
+                }
+            }
         }
 
         if (paidAmount > totalAmount) {
@@ -1362,6 +1388,7 @@ public class InstantCreditBillService {
         // Update bill
         // --------------------------------------------------------
 
+
         // Update GST fields only when supplied by the frontend.
         if (request.getGrossTotal() != null) {
             bill.setGrossTotal(
@@ -1369,15 +1396,9 @@ public class InstantCreditBillService {
             );
         }
 
-        if (request.getCgst() != null) {
-            bill.setCgst(
-                    request.getCgst()
-            );
-        }
-
-        if (request.getSgst() != null) {
-            bill.setSgst(
-                    request.getSgst()
+        if (request.getGstDetails() != null) {
+            bill.setGstDetails(
+                    new HashMap<>(request.getGstDetails())
             );
         }
 
@@ -2370,13 +2391,13 @@ public class InstantCreditBillService {
                 )
         );
 
-        response.setCgst(
-                bill.getCgst()
+
+        response.setGstDetails(
+                bill.getGstDetails() != null
+                        ? new HashMap<>(bill.getGstDetails())
+                        : new HashMap<>()
         );
 
-        response.setSgst(
-                bill.getSgst()
-        );
 
         response.setTotalAmount(
                 money(
@@ -2535,6 +2556,300 @@ public class InstantCreditBillService {
                         RoundingMode.HALF_UP
                 )
                 .doubleValue();
+    }
+
+
+
+
+    public ReceivePaymentResponse settleSpecificBill(
+            String hotelId,
+            String billId,
+            ReceivePaymentRequest request
+    ) {
+
+        // --------------------------------------------------------
+        // Validate request
+        // --------------------------------------------------------
+
+        if (request == null || request.getAmountReceived() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Payment amount is required"
+            );
+        }
+
+        validateAmount(
+                request.getAmountReceived(),
+                "Payment amount"
+        );
+
+        double amountReceived =
+                money(request.getAmountReceived());
+
+        if (amountReceived <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Payment amount must be greater than zero"
+            );
+        }
+
+        // --------------------------------------------------------
+        // Find customer and specified active bill
+        // --------------------------------------------------------
+
+        InstantCreditCustomer customer =
+                findCustomerContainingBill(hotelId, billId);
+
+        if (customer.getCreditEntries() == null) {
+            customer.setCreditEntries(new ArrayList<>());
+        }
+
+        InstantCreditCustomer.CreditEntry billEntry =
+                customer.getCreditEntries()
+                        .stream()
+                        .filter(entry ->
+                                entry.getEntryType()
+                                        == InstantCreditCustomer.EntryType.CREDIT_BILL
+                                        && entry.getBill() != null
+                                        && billId.equals(
+                                        entry.getBill().getBillId()
+                                )
+                        )
+                        .findFirst()
+                        .orElseThrow(() ->
+                                new ResponseStatusException(
+                                        HttpStatus.NOT_FOUND,
+                                        "Active credit bill not found"
+                                )
+                        );
+
+        InstantCreditCustomer.CreditBill bill =
+                billEntry.getBill();
+
+        double pendingAmount =
+                money(bill.getPendingAmount());
+
+        if (bill.isCompleted() || pendingAmount <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "This bill is already completed"
+            );
+        }
+
+        if (amountReceived > pendingAmount) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Payment amount cannot be greater than this bill's pending amount"
+            );
+        }
+
+        // --------------------------------------------------------
+        // Determine settlement order, like receivePayment()
+        // --------------------------------------------------------
+
+        InstantCreditCustomer.SettlementOrder order =
+                request.getSettlementOrder();
+
+        if (order == null) {
+            order =
+                    InstantCreditCustomer.SettlementOrder.OLDEST_FIRST;
+        }
+
+        // --------------------------------------------------------
+        // Apply payment only to the specified bill
+        // --------------------------------------------------------
+
+        String paymentId =
+                UUID.randomUUID().toString();
+
+        LocalDateTime paymentTime =
+                LocalDateTime.now();
+
+        double updatedPaidAmount =
+                money(
+                        bill.getPaidAmount() + amountReceived
+                );
+
+        double updatedPendingAmount =
+                money(
+                        bill.getTotalAmount() - updatedPaidAmount
+                );
+
+        boolean billCompleted =
+                updatedPendingAmount <= 0;
+
+        bill.setPaidAmount(updatedPaidAmount);
+
+        bill.setPendingAmount(
+                billCompleted ? 0.0 : updatedPendingAmount
+        );
+
+        bill.setCompleted(billCompleted);
+        bill.setUpdatedAt(paymentTime);
+
+        Set<String> completedBillIds =
+                new HashSet<>();
+
+        if (billCompleted) {
+            completedBillIds.add(bill.getBillId());
+        }
+
+        // --------------------------------------------------------
+        // Create allocation for the specific bill
+        // --------------------------------------------------------
+
+        InstantCreditCustomer.PaymentAllocation billAllocation =
+                new InstantCreditCustomer.PaymentAllocation();
+
+        billAllocation.setBillId(bill.getBillId());
+        billAllocation.setAmountApplied(amountReceived);
+
+        // --------------------------------------------------------
+        // Add bill-level payment record
+        // Follow the same pattern as receivePayment()
+        // --------------------------------------------------------
+
+        InstantCreditCustomer.PaymentReceived billPayment =
+                new InstantCreditCustomer.PaymentReceived();
+
+        billPayment.setPaymentId(paymentId);
+        billPayment.setAmountReceived(amountReceived);
+        billPayment.setPaymentDate(LocalDate.now());
+        billPayment.setReceivedAt(paymentTime);
+        billPayment.setSettlementOrder(order);
+
+        billPayment.setAllocations(
+                new ArrayList<>(
+                        List.of(billAllocation)
+                )
+        );
+
+        if (bill.getPaymentReceived() == null) {
+            bill.setPaymentReceived(new ArrayList<>());
+        }
+
+        bill.getPaymentReceived().add(billPayment);
+
+        // --------------------------------------------------------
+        // Create ledger allocation
+        // --------------------------------------------------------
+
+        InstantCreditCustomer.PaymentAllocation ledgerAllocation =
+                new InstantCreditCustomer.PaymentAllocation();
+
+        ledgerAllocation.setBillId(bill.getBillId());
+        ledgerAllocation.setAmountApplied(amountReceived);
+
+        List<InstantCreditCustomer.PaymentAllocation>
+                ledgerAllocations = new ArrayList<>();
+
+        ledgerAllocations.add(ledgerAllocation);
+
+        // --------------------------------------------------------
+        // Create separate chronological RECEIVE_PAYMENT record
+        // Follow the same pattern as receivePayment()
+        // --------------------------------------------------------
+
+        InstantCreditCustomer.PaymentReceived ledgerPayment =
+                new InstantCreditCustomer.PaymentReceived();
+
+        ledgerPayment.setPaymentId(paymentId);
+        ledgerPayment.setAmountReceived(amountReceived);
+        ledgerPayment.setPaymentDate(LocalDate.now());
+        ledgerPayment.setReceivedAt(paymentTime);
+        ledgerPayment.setSettlementOrder(order);
+
+        ledgerPayment.setAllocations(ledgerAllocations);
+
+        InstantCreditCustomer.CreditEntry paymentEntry =
+                new InstantCreditCustomer.CreditEntry();
+
+        paymentEntry.setEntryId(
+                UUID.randomUUID().toString()
+        );
+
+        paymentEntry.setSequenceNumber(
+                nextSequence(customer)
+        );
+
+        paymentEntry.setEntryType(
+                InstantCreditCustomer.EntryType.RECEIVE_PAYMENT
+        );
+
+        paymentEntry.setTransactionDate(LocalDate.now());
+        paymentEntry.setTransactionTime(paymentTime);
+        paymentEntry.setBill(null);
+        paymentEntry.setPayment(ledgerPayment);
+
+        customer.getCreditEntries().add(paymentEntry);
+
+        // --------------------------------------------------------
+        // Move completed bill and eligible payment to history
+        // --------------------------------------------------------
+
+        if (!completedBillIds.isEmpty()) {
+            moveCompletedBillsAndPayments(
+                    customer,
+                    completedBillIds
+            );
+        }
+
+        // --------------------------------------------------------
+        // Update customer and save
+        // --------------------------------------------------------
+
+        customer.setActive(
+                hasActivePendingBills(customer)
+        );
+
+        customer.setUpdatedAt(paymentTime);
+
+        saveCompletedHistory(customer);
+
+        customerRepository.save(customer);
+
+        // --------------------------------------------------------
+        // Build response
+        // --------------------------------------------------------
+
+        ReceivePaymentResponse response =
+                new ReceivePaymentResponse();
+
+        response.setPaymentId(paymentId);
+        response.setAmountReceived(amountReceived);
+        response.setAmountApplied(amountReceived);
+        response.setUnappliedAmount(0.0);
+
+        response.setTotalPendingAmount(
+                calculateTotalPending(customer)
+        );
+
+        ReceivePaymentResponse.Allocation responseAllocation =
+                new ReceivePaymentResponse.Allocation();
+
+        responseAllocation.setBillId(
+                bill.getBillId()
+        );
+
+        responseAllocation.setAmountApplied(
+                amountReceived
+        );
+
+        responseAllocation.setRemainingPendingAmount(
+                billCompleted ? 0.0 : updatedPendingAmount
+        );
+
+        responseAllocation.setBillCompleted(
+                billCompleted
+        );
+
+        response.setAllocations(
+                new ArrayList<>(
+                        List.of(responseAllocation)
+                )
+        );
+
+        return response;
     }
 
 
