@@ -1,22 +1,28 @@
 package com.raghunath.hotelview.service.restaurantandinstantadmin;
 
 import com.raghunath.hotelview.dto.restaurantandinstant.credit.*;
+import com.raghunath.hotelview.entity.restaurantandinstant.Admin;
+import com.raghunath.hotelview.entity.restaurantandinstant.CompletedOrder;
 import com.raghunath.hotelview.entity.restaurantandinstant.InstantCreditCompletedBills;
 import com.raghunath.hotelview.entity.restaurantandinstant.InstantCreditCustomer;
+import com.raghunath.hotelview.repository.restaurantandinstant.AdminRepository;
+import com.raghunath.hotelview.repository.restaurantandinstant.CompleteOrderRepository;
 import com.raghunath.hotelview.repository.restaurantandinstant.InstantCreditCompletedBillsRepository;
 import com.raghunath.hotelview.repository.restaurantandinstant.InstantCreditCustomerRepository;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
+import java.time.*;
 import java.util.*;
 import java.util.stream.Collectors;
 import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerChangesResponse;
@@ -35,6 +41,10 @@ import java.time.format.DateTimeFormatter;
 @RequiredArgsConstructor
 @Slf4j
 public class InstantCreditBillService {
+
+    private final AdminRepository adminRepository;
+    private final CompleteOrderRepository completeOrderRepository;
+    private final MongoTemplate mongoTemplate;
 
     private final InstantCreditCustomerRepository customerRepository;
 
@@ -173,6 +183,201 @@ public class InstantCreditBillService {
                 customers
         );
     }
+
+
+    public CreditBillDashboardStatsDTO getCreditBillDashboardStats(
+            String hotelId
+    ) {
+
+        // --------------------------------------------------------
+        // Current date and time in IST
+        // --------------------------------------------------------
+
+        ZoneId istZone = ZoneId.of("Asia/Kolkata");
+
+        ZonedDateTime nowIST = ZonedDateTime.now(istZone);
+
+        String todayDate = nowIST.format(
+                DateTimeFormatter.ISO_LOCAL_DATE
+        );
+
+        ZonedDateTime last24HoursStart = nowIST.minusHours(24);
+
+        String last24HoursStartDate = last24HoursStart.format(
+                DateTimeFormatter.ISO_LOCAL_DATE
+        );
+
+        // --------------------------------------------------------
+        // Fetch restaurant/admin details
+        // --------------------------------------------------------
+
+        Admin admin = adminRepository.findByHotelId(hotelId)
+                .orElseThrow(() ->
+                        new ResponseStatusException(
+                                HttpStatus.NOT_FOUND,
+                                "Hotel Admin not found"
+                        )
+                );
+
+        String restaurantName =
+                admin.getRestaurantName() != null
+                        ? admin.getRestaurantName()
+                        : "";
+
+        String planType =
+                admin.getPlanType() != null
+                        ? admin.getPlanType()
+                        : "BASIC";
+
+        // --------------------------------------------------------
+        // Today's order counts
+        // --------------------------------------------------------
+
+        List<String> deliveryTypes = List.of("HOME", "PARCEL");
+
+        Long homeDeliveriesCount =
+                completeOrderRepository
+                        .countByHotelIdAndOrderTypeInAndCheckoutDate(
+                                hotelId,
+                                deliveryTypes,
+                                todayDate
+                        );
+
+        List<String> instantTypes = List.of("INSTANT");
+
+        Long instantCount =
+                completeOrderRepository
+                        .countByHotelIdAndOrderTypeInAndCheckoutDate(
+                                hotelId,
+                                instantTypes,
+                                todayDate
+                        );
+
+        Long completedOrdersTodayCount =
+                completeOrderRepository
+                        .countByHotelIdAndCheckoutDate(
+                                hotelId,
+                                todayDate
+                        );
+
+        // --------------------------------------------------------
+        // Today's sales
+        // --------------------------------------------------------
+
+        Double todaySalesRupees = 0.0;
+
+        try {
+
+            Double result =
+                    completeOrderRepository
+                            .sumTotalPayableByHotelIdAndCheckoutDate(
+                                    hotelId,
+                                    todayDate
+                            );
+
+            todaySalesRupees = result != null ? result : 0.0;
+
+        } catch (Exception e) {
+
+            log.error(
+                    "CREDIT_DASHBOARD: Today's sales calculation failed for hotel {}",
+                    hotelId,
+                    e
+            );
+        }
+
+        // --------------------------------------------------------
+        // Last 24 hours sales
+        // --------------------------------------------------------
+
+        Double last24HoursSalesRupees = 0.0;
+
+        try {
+
+            List<CompletedOrder> completedOrders =
+                    mongoTemplate.find(
+                            new Query(
+                                    Criteria.where("hotelId").is(hotelId)
+                                            .orOperator(
+                                                    Criteria.where("checkoutDate")
+                                                            .is(todayDate),
+                                                    Criteria.where("checkoutDate")
+                                                            .is(last24HoursStartDate)
+                                            )
+                            ),
+                            CompletedOrder.class
+                    );
+
+            last24HoursSalesRupees = completedOrders.stream()
+                    .filter(order -> {
+                        try {
+
+                            LocalDateTime orderDateTime =
+                                    LocalDateTime.parse(
+                                            order.getCheckoutDate()
+                                                    + "T"
+                                                    + order.getCheckoutTime()
+                                    );
+
+                            ZonedDateTime orderTimeIST =
+                                    orderDateTime.atZone(istZone);
+
+                            return !orderTimeIST.isBefore(last24HoursStart)
+                                    && !orderTimeIST.isAfter(nowIST);
+
+                        } catch (Exception ex) {
+                            return false;
+                        }
+                    })
+                    .mapToDouble(order ->
+                            order.getTotalPayable() != null
+                                    ? order.getTotalPayable()
+                                    : 0.0
+                    )
+                    .sum();
+
+        } catch (Exception e) {
+
+            log.error(
+                    "CREDIT_DASHBOARD: Last 24 hours sales calculation failed for hotel {}",
+                    hotelId,
+                    e
+            );
+        }
+
+        // --------------------------------------------------------
+        // Return only the requested dashboard fields
+        // --------------------------------------------------------
+
+        return CreditBillDashboardStatsDTO.builder()
+                .completedOrdersTodayCount(completedOrdersTodayCount)
+                .homeDeliveriesCount(homeDeliveriesCount)
+                .instantCount(instantCount)
+                .last24HoursSalesRupees(
+                        roundTo2Decimals(last24HoursSalesRupees)
+                )
+                .planType(planType)
+                .restaurantAddress(admin.getRestaurantAddress())
+                .restaurantContact(admin.getRestaurantContact())
+                .restaurantLogo(admin.getRestaurantLogo())
+                .restaurantName(restaurantName)
+                .restaurantUpi(admin.getRestaurantUpi())
+                .todaySalesRupees(
+                        roundTo2Decimals(todaySalesRupees)
+                )
+                .build();
+    }
+
+    private Double roundTo2Decimals(Double value) {
+        if (value == null) {
+            return 0.0;
+        }
+
+        return BigDecimal.valueOf(value)
+                .setScale(2, RoundingMode.HALF_UP)
+                .doubleValue();
+    }
+
 
 
 // ============================================================

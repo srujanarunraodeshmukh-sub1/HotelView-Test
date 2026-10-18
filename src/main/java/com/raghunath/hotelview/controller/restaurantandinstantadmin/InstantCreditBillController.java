@@ -256,6 +256,18 @@ public class InstantCreditBillController {
     }
 
 
+    @GetMapping("/dashboard/credit-bill/stats")
+    public ResponseEntity<CreditBillDashboardStatsDTO>
+    getCreditBillDashboardStats() {
+
+        String hotelId = getHotelId();
+
+        return ResponseEntity.ok(
+                creditBillService.getCreditBillDashboardStats(hotelId)
+        );
+    }
+
+
     @PostMapping("/{billId}/settle")
     public ResponseEntity<ReceivePaymentResponse> settleSpecificBill(
             @PathVariable String billId,
