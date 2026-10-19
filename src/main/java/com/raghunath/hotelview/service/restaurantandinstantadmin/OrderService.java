@@ -1686,8 +1686,38 @@ public class OrderService {
         Double totalStaffColl = 0.0;
         Double totalTaxColl = 0.0;
         Map<String, Double> rootGstBreakdown = new HashMap<>();
-        List<DailySummaryResponse.StaffSummaryDto> staffList = new ArrayList<>();
 
+
+        // Credit Bill Summary
+        DailySummaryResponse.CreditBillSummaryDto creditBillSummary = null;
+
+        if (staffDoc != null) {
+            Document creditDoc =
+                    staffDoc.get("creditBillSummary", Document.class);
+
+            if (creditDoc != null) {
+                creditBillSummary =
+                        DailySummaryResponse.CreditBillSummaryDto.builder()
+                                .creditBillToday(
+                                        readCreditMetric(
+                                                creditDoc, "creditBillToday"
+                                        )
+                                )
+                                .creditPendingToday(
+                                        readCreditMetric(
+                                                creditDoc, "creditPendingToday"
+                                        )
+                                )
+                                .creditReceivedToday(
+                                        readCreditMetric(
+                                                creditDoc, "creditReceivedToday"
+                                        )
+                                )
+                                .build();
+            }
+        }
+
+        List<DailySummaryResponse.StaffSummaryDto> staffList = null;
         if (staffDoc != null) {
             docId = staffDoc.getString("_id");
             totalStaffColl = roundTo2Decimals(staffDoc.getDouble("totalCollection"));
@@ -1703,6 +1733,7 @@ public class OrderService {
             }
 
             List<Document> rawStaff = staffDoc.getList("staff", Document.class);
+            staffList = new ArrayList<>();
             if (rawStaff != null) {
                 staffList = rawStaff.stream().map(d -> {
                     Map<String, Double> staffGst = new HashMap<>();
@@ -1787,7 +1818,21 @@ public class OrderService {
                 .staffSummary(staffList)
                 .totalQtySold(totalQty)
                 .itemSummary(itemList)
+                .creditBillSummary(creditBillSummary)
                 .build();
+    }
+
+    private Double readCreditMetric(
+            Document document,
+            String key
+    ) {
+        Object value = document.get(key);
+
+        if (value instanceof Number number) {
+            return roundTo2Decimals(number.doubleValue());
+        }
+
+        return 0.0;
     }
 
     private Double roundTo2Decimals(Double value) {

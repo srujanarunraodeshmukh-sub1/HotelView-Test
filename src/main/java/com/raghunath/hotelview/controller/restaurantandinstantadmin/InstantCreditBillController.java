@@ -1,6 +1,7 @@
 package com.raghunath.hotelview.controller.restaurantandinstantadmin;
 
 import com.raghunath.hotelview.dto.restaurantandinstant.credit.*;
+import com.raghunath.hotelview.security.JwtUtil;
 import com.raghunath.hotelview.security.UserTypeAccessGuard;
 import com.raghunath.hotelview.service.restaurantandinstantadmin.InstantCreditBillService;
 import jakarta.validation.Valid;
@@ -14,6 +15,9 @@ import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerCha
 import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerPageResponse;
 import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerVersionResponse;
 
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.http.HttpStatus;
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -26,6 +30,8 @@ public class InstantCreditBillController {
     private final InstantCreditBillService creditBillService;
 
     private final UserTypeAccessGuard userTypeAccessGuard;
+
+    private final JwtUtil jwtUtil;
 
 
     // =========================================================
@@ -116,20 +122,23 @@ public class InstantCreditBillController {
 
     @PostMapping
     public ResponseEntity<CreditBillResponse> createCreditBill(
-            @Valid @RequestBody CreateCreditBillRequest request
-    ) {
+            @RequestHeader("Authorization") String authHeader,
+            @Valid @RequestBody CreateCreditBillRequest request) {
 
-        String hotelId = getHotelId();
+        userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
+
+        String token = authHeader.substring(7).trim();
+        String hotelId = jwtUtil.extractHotelId(token);
+        String actualLoggedInUser = jwtUtil.extractUserId(token);
 
         CreditBillResponse response =
                 creditBillService.createCreditBill(
                         hotelId,
-                        request
+                        request,
+                        actualLoggedInUser
                 );
 
-        return ResponseEntity
-                .status(HttpStatus.CREATED)
-                .body(response);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
 
@@ -194,19 +203,23 @@ public class InstantCreditBillController {
     // =========================================================
 
     @PostMapping("/customers/{customerId}/payments")
-    public ResponseEntity<ReceivePaymentResponse>
-    receivePayment(
+    public ResponseEntity<ReceivePaymentResponse> receivePayment(
+            @RequestHeader("Authorization") String authHeader,
             @PathVariable String customerId,
-            @Valid @RequestBody ReceivePaymentRequest request
-    ) {
+            @Valid @RequestBody ReceivePaymentRequest request) {
 
-        String hotelId = getHotelId();
+        userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
+
+        String token = authHeader.substring(7).trim();
+        String hotelId = jwtUtil.extractHotelId(token);
+        String actualLoggedInUser = jwtUtil.extractUserId(token);
 
         return ResponseEntity.ok(
                 creditBillService.receivePayment(
                         hotelId,
                         customerId,
-                        request
+                        request,
+                        actualLoggedInUser
                 )
         );
     }
@@ -217,19 +230,23 @@ public class InstantCreditBillController {
     // =========================================================
 
     @PutMapping("/{billId}")
-    public ResponseEntity<CreditBillResponse>
-    editCreditBill(
+    public ResponseEntity<CreditBillResponse> editCreditBill(
+            @RequestHeader("Authorization") String authHeader,
             @PathVariable String billId,
-            @Valid @RequestBody EditCreditBillRequest request
-    ) {
+            @Valid @RequestBody EditCreditBillRequest request) {
 
-        String hotelId = getHotelId();
+        userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
+
+        String token = authHeader.substring(7).trim();
+        String hotelId = jwtUtil.extractHotelId(token);
+        String actualLoggedInUser = jwtUtil.extractUserId(token);
 
         return ResponseEntity.ok(
                 creditBillService.editCreditBill(
                         hotelId,
                         billId,
-                        request
+                        request,
+                        actualLoggedInUser
                 )
         );
     }
@@ -268,20 +285,25 @@ public class InstantCreditBillController {
     }
 
 
+
     @PostMapping("/{billId}/settle")
     public ResponseEntity<ReceivePaymentResponse> settleSpecificBill(
+            @RequestHeader("Authorization") String authHeader,
             @PathVariable String billId,
-            @RequestBody ReceivePaymentRequest request
-    ) {
+            @Valid @RequestBody ReceivePaymentRequest request) {
+
         userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
 
-        String hotelId = getHotelId();
+        String token = authHeader.substring(7).trim();
+        String hotelId = jwtUtil.extractHotelId(token);
+        String actualLoggedInUser = jwtUtil.extractUserId(token);
 
         return ResponseEntity.ok(
                 creditBillService.settleSpecificBill(
                         hotelId,
                         billId,
-                        request
+                        request,
+                        actualLoggedInUser
                 )
         );
     }

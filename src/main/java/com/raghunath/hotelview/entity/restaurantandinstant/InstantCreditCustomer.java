@@ -142,6 +142,9 @@ public class InstantCreditCustomer {
 
         private List<CreditBillEdit> editHistory =
                 new ArrayList<>();
+
+        private String createdById;
+        private String updatedById;
     }
 
 
@@ -201,6 +204,8 @@ public class InstantCreditCustomer {
 
         private List<PaymentAllocation> allocations =
                 new ArrayList<>();
+
+        private String receivedById;
     }
 
 
@@ -245,5 +250,7 @@ public class InstantCreditCustomer {
         private String editReason;
 
         private LocalDateTime editedAt;
+
+        private String editedById;
     }
 }

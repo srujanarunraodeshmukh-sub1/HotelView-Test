@@ -5,6 +5,7 @@ import lombok.*;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -37,4 +38,12 @@ public class CompletedOrder {
     private String checkoutBy;
     private String checkoutDate;
     private String checkoutTime;
+
+    // Identifies the original credit bill.
+    // Null for ordinary restaurant and instant checkout orders.
+    private String creditBillId;
+
+    private Double paidAmount;
+    private Double pendingAmount;
+    private LocalDate billDate;
 }

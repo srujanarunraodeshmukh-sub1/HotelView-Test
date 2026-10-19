@@ -10,6 +10,15 @@ import com.raghunath.hotelview.repository.restaurantandinstant.CompleteOrderRepo
 import com.raghunath.hotelview.repository.restaurantandinstant.InstantCreditCompletedBillsRepository;
 import com.raghunath.hotelview.repository.restaurantandinstant.InstantCreditCustomerRepository;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
+
+import org.bson.Document;
+import org.springframework.data.mongodb.core.query.Update;
+
+import com.raghunath.hotelview.dto.restaurantandinstant.OrderItem;
+import com.raghunath.hotelview.entity.restaurantandinstant.KitchenOrderSnapshot;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -29,6 +38,9 @@ import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerCha
 import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerPageResponse;
 import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerResponse;
 import com.raghunath.hotelview.dto.restaurantandinstant.credit.CreditCustomerVersionResponse;
+
+import com.raghunath.hotelview.entity.restaurantandinstant.KitchenOrderSnapshot;
+import com.raghunath.hotelview.dto.restaurantandinstant.OrderItem;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -379,7 +391,6 @@ public class InstantCreditBillService {
     }
 
 
-
 // ============================================================
 // MAP CUSTOMER TO LIST RESPONSE
 // ============================================================
@@ -421,7 +432,8 @@ public class InstantCreditBillService {
 
     public CreditBillResponse createCreditBill(
             String hotelId,
-            CreateCreditBillRequest request
+            CreateCreditBillRequest request,
+            String actualLoggedInUser
     ) {
 
         validateAmount(
@@ -711,6 +723,9 @@ public class InstantCreditBillService {
                 new ArrayList<>()
         );
 
+        bill.setCreatedById(actualLoggedInUser);
+        bill.setUpdatedById(actualLoggedInUser);
+
         // --------------------------------------------------------
         // Create CREDIT_BILL ledger entry
         // --------------------------------------------------------
@@ -779,6 +794,32 @@ public class InstantCreditBillService {
         customer.setUpdatedAt(now);
 
         customerRepository.save(customer);
+
+        // Add the sale to completed_orders exactly once.
+        syncCreditBillToCompletedOrders(
+                hotelId,
+                customer,
+                bill,
+                actualLoggedInUser
+        );
+
+        // Update daily credit bill analytics
+        String summaryDate = getCreditSummaryDate(bill);
+
+        updateCreditBillSummary(
+                hotelId,
+                summaryDate,
+                bill.getTotalAmount(),    // Credit bill sales increase
+                bill.getPendingAmount(),  // Outstanding balance increase
+                bill.getPaidAmount()      // Include initial payment received today
+        );
+
+        syncCreditBillItemSummary(
+                hotelId,
+                getCreditSummaryDate(bill),
+                bill.getBillId(),
+                bill.getCommodities()
+        );
 
         return toBillResponse(
                 customer.getId(),
@@ -1002,66 +1043,32 @@ public class InstantCreditBillService {
     // RECEIVE PAYMENT
     // ============================================================
 
-    public ReceivePaymentResponse receivePayment(
-            String hotelId,
-            String customerId,
-            ReceivePaymentRequest request
-    ) {
+    public ReceivePaymentResponse receivePayment(String hotelId, String customerId, ReceivePaymentRequest request, String actualLoggedInUser) {
 
-        if (request == null ||
-                request.getAmountReceived() == null) {
-
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Payment amount is required"
-            );
+        if (request == null || request.getAmountReceived() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment amount is required");
         }
 
-        validateAmount(
-                request.getAmountReceived(),
-                "Payment amount"
-        );
+        validateAmount(request.getAmountReceived(), "Payment amount");
 
-        double amountReceived =
-                money(
-                        request.getAmountReceived()
-                );
+        double amountReceived = money(request.getAmountReceived());
 
         if (amountReceived <= 0) {
-
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Payment amount must be greater than zero"
-            );
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment amount must be greater than zero");
         }
 
-        InstantCreditCustomer customer =
-                validateCustomer(
-                        hotelId,
-                        customerId
-                );
+        InstantCreditCustomer customer = validateCustomer(hotelId, customerId);
 
-        List<InstantCreditCustomer.CreditEntry>
-                activeBills =
-                getActiveBillEntries(customer);
+        List<InstantCreditCustomer.CreditEntry> activeBills = getActiveBillEntries(customer);
 
         if (activeBills.isEmpty()) {
-
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Customer has no pending bills"
-            );
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Customer has no pending bills");
         }
 
-        double totalPending =
-                calculateTotalPending(customer);
+        double totalPending = calculateTotalPending(customer);
 
         if (amountReceived > totalPending) {
-
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Payment amount cannot be greater than total pending amount"
-            );
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment amount cannot be greater than total pending amount");
         }
 
         InstantCreditCustomer.SettlementOrder order =
@@ -1118,9 +1125,15 @@ public class InstantCreditBillService {
         Set<String> completedBillIds =
                 new HashSet<>();
 
+        Set<String> affectedBillIds = new HashSet<>();
+
         // --------------------------------------------------------
         // Apply payment bill by bill
         // --------------------------------------------------------
+
+        String today = LocalDate.now(INDIA_ZONE).toString();
+
+        double pendingTodayDelta = 0.0;
 
         for (InstantCreditCustomer.CreditEntry entry :
                 activeBills) {
@@ -1131,6 +1144,12 @@ public class InstantCreditBillService {
 
             InstantCreditCustomer.CreditBill bill =
                     entry.getBill();
+
+            double previousBillPending =
+                    money(bill.getPendingAmount());
+
+            String originalBillDate =
+                    getCreditSummaryDate(bill);
 
             double pending =
                     money(
@@ -1144,6 +1163,10 @@ public class InstantCreditBillService {
                                     pending
                             )
                     );
+
+            if (applied > 0) {
+                affectedBillIds.add(bill.getBillId());
+            }
 
             bill.setPaidAmount(
                     money(
@@ -1175,9 +1198,21 @@ public class InstantCreditBillService {
                 );
             }
 
+
+            if (applied > 0 && originalBillDate.equals(
+                    LocalDate.now(INDIA_ZONE).toString())) {
+
+                pendingTodayDelta += money(
+                        bill.getPendingAmount() - previousBillPending
+                );
+            }
+
+
             bill.setUpdatedAt(
                     paymentTime
             );
+
+            bill.setUpdatedById(actualLoggedInUser);
 
             // ----------------------------------------------------
             // Add payment to bill
@@ -1218,6 +1253,8 @@ public class InstantCreditBillService {
             billPayment.setSettlementOrder(
                     order
             );
+
+            billPayment.setReceivedById(actualLoggedInUser);
 
             billPayment.setAllocations(
                     new ArrayList<>(
@@ -1324,6 +1361,8 @@ public class InstantCreditBillService {
                 ledgerAllocations
         );
 
+        payment.setReceivedById(actualLoggedInUser);
+
         InstantCreditCustomer.CreditEntry paymentEntry =
                 new InstantCreditCustomer.CreditEntry();
 
@@ -1378,6 +1417,27 @@ public class InstantCreditBillService {
 
         customerRepository.save(customer);
 
+        for (InstantCreditCustomer.CreditEntry entry : activeBills) {
+            if (entry.getBill() != null
+                    && affectedBillIds.contains(entry.getBill().getBillId())) {
+
+                syncCreditBillPaymentToCompletedOrder(
+                        hotelId,
+                        entry.getBill()
+                );
+            }
+        }
+
+
+        updateCreditBillSummary(
+                hotelId,
+                today,
+                0.0,                  // Do not count another sale
+                money(pendingTodayDelta),
+                amountReceived        // Payment received today
+        );
+
+
         // --------------------------------------------------------
         // Response
         // --------------------------------------------------------
@@ -1422,7 +1482,8 @@ public class InstantCreditBillService {
     public CreditBillResponse editCreditBill(
             String hotelId,
             String billId,
-            EditCreditBillRequest request
+            EditCreditBillRequest request,
+            String actualLoggedInUser
     ) {
 
         validateAmount(
@@ -1529,6 +1590,15 @@ public class InstantCreditBillService {
         InstantCreditCustomer.CreditBill bill =
                 billEntry.getBill();
 
+        double previousTotalAmount = bill.getTotalAmount();
+
+        double previousPaidAmount = bill.getPaidAmount();
+
+        double previousPendingAmount = bill.getPendingAmount();
+
+        String billDateBeforeEdit =
+                getCreditSummaryDate(bill);
+
         LocalDateTime now =
                 LocalDateTime.now();
 
@@ -1589,6 +1659,8 @@ public class InstantCreditBillService {
         bill.getEditHistory()
                 .add(edit);
 
+        edit.setEditedById(actualLoggedInUser);
+
         // --------------------------------------------------------
         // Update bill
         // --------------------------------------------------------
@@ -1639,6 +1711,8 @@ public class InstantCreditBillService {
 
         bill.setUpdatedAt(now);
 
+        bill.setUpdatedById(actualLoggedInUser);
+
         // --------------------------------------------------------
         // If bill became completed
         // --------------------------------------------------------
@@ -1667,6 +1741,53 @@ public class InstantCreditBillService {
         saveCompletedHistory(customer);
 
         customerRepository.save(customer);
+
+        // Update the existing completed sale rather than inserting another.
+        syncCreditBillToCompletedOrders(
+                hotelId,
+                customer,
+                bill,
+                actualLoggedInUser
+        );
+
+        double totalDelta = money(
+                bill.getTotalAmount() - previousTotalAmount
+        );
+
+        double pendingDelta = money(
+                bill.getPendingAmount() - previousPendingAmount
+        );
+
+        double receivedDelta = money(
+                bill.getPaidAmount() - previousPaidAmount
+        );
+
+        String today = LocalDate.now(INDIA_ZONE).toString();
+
+        // Update sale and outstanding balance for the original bill date.
+        updateCreditBillSummary(
+                hotelId,
+                billDateBeforeEdit,
+                totalDelta,
+                pendingDelta,
+                0.0
+        );
+
+        // Update today's received-payment metric by the paid-amount difference.
+        updateCreditBillSummary(
+                hotelId,
+                today,
+                0.0,
+                0.0,
+                receivedDelta
+        );
+
+        syncCreditBillItemSummary(
+                hotelId,
+                getCreditSummaryDate(bill),
+                bill.getBillId(),
+                bill.getCommodities()
+        );
 
         return toBillResponse(
                 customer.getId(),
@@ -2769,7 +2890,8 @@ public class InstantCreditBillService {
     public ReceivePaymentResponse settleSpecificBill(
             String hotelId,
             String billId,
-            ReceivePaymentRequest request
+            ReceivePaymentRequest request,
+            String actualLoggedInUser
     ) {
 
         // --------------------------------------------------------
@@ -2831,6 +2953,15 @@ public class InstantCreditBillService {
         InstantCreditCustomer.CreditBill bill =
                 billEntry.getBill();
 
+        double previousPendingAmount =
+                money(bill.getPendingAmount());
+
+        String originalBillDate =
+                getCreditSummaryDate(bill);
+
+        String today =
+                LocalDate.now(INDIA_ZONE).toString();
+
         double pendingAmount =
                 money(bill.getPendingAmount());
 
@@ -2891,9 +3022,12 @@ public class InstantCreditBillService {
 
         bill.setCompleted(billCompleted);
         bill.setUpdatedAt(paymentTime);
+        bill.setUpdatedById(actualLoggedInUser);
 
         Set<String> completedBillIds =
                 new HashSet<>();
+
+        Set<String> affectedBillIds = new HashSet<>();
 
         if (billCompleted) {
             completedBillIds.add(bill.getBillId());
@@ -2928,6 +3062,8 @@ public class InstantCreditBillService {
                         List.of(billAllocation)
                 )
         );
+
+        billPayment.setReceivedById(actualLoggedInUser);
 
         if (bill.getPaymentReceived() == null) {
             bill.setPaymentReceived(new ArrayList<>());
@@ -2965,6 +3101,8 @@ public class InstantCreditBillService {
         ledgerPayment.setSettlementOrder(order);
 
         ledgerPayment.setAllocations(ledgerAllocations);
+
+        ledgerPayment.setReceivedById(actualLoggedInUser);
 
         InstantCreditCustomer.CreditEntry paymentEntry =
                 new InstantCreditCustomer.CreditEntry();
@@ -3012,6 +3150,25 @@ public class InstantCreditBillService {
         saveCompletedHistory(customer);
 
         customerRepository.save(customer);
+
+        syncCreditBillPaymentToCompletedOrder(
+                hotelId,
+                bill
+        );
+
+
+        double pendingDelta = money(
+                bill.getPendingAmount() - previousPendingAmount
+        );
+
+        updateCreditBillSummary(
+                hotelId,
+                today,
+                0.0, // Do not count another sale
+                originalBillDate.equals(today) ? pendingDelta : 0.0,
+                amountReceived
+        );
+
 
         // --------------------------------------------------------
         // Build response
@@ -3083,4 +3240,495 @@ public class InstantCreditBillService {
             );
         }
     }
+
+    private static final ZoneId INDIA_ZONE =
+            ZoneId.of("Asia/Kolkata");
+
+    private String getCreditSummaryDate(
+            InstantCreditCustomer.CreditBill bill
+    ) {
+        if (bill != null && bill.getBillDate() != null) {
+            return bill.getBillDate().toString();
+        }
+
+        return LocalDate.now(INDIA_ZONE).toString();
+    }
+
+    private String getStaffSummaryId(
+            String hotelId,
+            String date
+    ) {
+        return hotelId + "_" + date + "_STAFF";
+    }
+
+    private void updateCreditBillSummary(
+            String hotelId,
+            String date,
+            double billTodayDelta,
+            double pendingTodayDelta,
+            double receivedTodayDelta
+    ) {
+        String documentId = getStaffSummaryId(hotelId, date);
+
+        Query query = new Query(
+                Criteria.where("_id").is(documentId)
+        );
+
+        Update update = new Update()
+                .inc(
+                        "creditBillSummary.creditBillToday",
+                        billTodayDelta
+                )
+                .inc(
+                        "creditBillSummary.creditPendingToday",
+                        pendingTodayDelta
+                )
+                .inc(
+                        "creditBillSummary.creditReceivedToday",
+                        receivedTodayDelta
+                )
+                .setOnInsert("restaurantId", hotelId)
+                .setOnInsert("date", date);
+
+        mongoTemplate.upsert(
+                query,
+                update,
+                "daily_staff_summary"
+        );
+    }
+
+    private CompletedOrder syncCreditBillToCompletedOrders(
+            String hotelId,
+            InstantCreditCustomer customer,
+            InstantCreditCustomer.CreditBill bill,
+            String actualLoggedInUser
+    ) {
+        if (bill == null || bill.getBillId() == null) {
+            throw new IllegalArgumentException(
+                    "Credit bill ID is required"
+            );
+        }
+
+        CompletedOrder order = completeOrderRepository
+                .findByHotelIdAndCreditBillId(
+                        hotelId,
+                        bill.getBillId()
+                )
+                .orElseGet(CompletedOrder::new);
+
+        boolean isNewSale = order.getId() == null;
+
+        List<OrderItem> items = new ArrayList<>();
+
+        if (bill.getCommodities() != null) {
+            for (InstantCreditCustomer.CreditCommodity commodity
+                    : bill.getCommodities()) {
+
+                if (commodity == null) {
+                    continue;
+                }
+
+                items.add(
+                        OrderItem.builder()
+                                .itemId(commodity.getId())
+                                .itemName(commodity.getName())
+                                .quantity(String.valueOf(commodity.getQuantity()))
+                                .unit(commodity.getUnit())
+                                .price(commodity.getRate())
+                                .subTotal(commodity.getSubtotal())
+                                .gst(String.valueOf(commodity.getItemGst()))
+                                .build()
+                );
+            }
+        }
+
+        LocalDate billDate = bill.getBillDate() != null
+                ? bill.getBillDate()
+                : LocalDate.now(ZoneId.of("Asia/Kolkata"));
+
+        LocalDateTime createdAt = bill.getCreatedAt() != null
+                ? bill.getCreatedAt()
+                : LocalDateTime.now(ZoneId.of("Asia/Kolkata"));
+
+        String checkoutTime = createdAt.format(
+                DateTimeFormatter.ofPattern("HH:mm:ss")
+        );
+
+        KitchenOrderSnapshot snapshot = KitchenOrderSnapshot.builder()
+                .id(bill.getBillId())
+                .items(items)
+                .totalAmount(bill.getTotalAmount())
+                .status("COMPLETED")
+                .placedBy(actualLoggedInUser)
+                .completedBy(actualLoggedInUser)
+                .createdDate(billDate.toString())
+                .createdTime(checkoutTime)
+                .build();
+
+        order.setHotelId(hotelId);
+        order.setCreditBillId(bill.getBillId());
+        order.setOrderType("INSTANT");
+
+        order.setCustomerName(customer.getName());
+        order.setCustomerMobile(customer.getMobile());
+        order.setCustomerAddress(customer.getAddress());
+
+        order.setAllOrders(Collections.singletonList(snapshot));
+
+        order.setGrandTotal(bill.getGrossTotal());
+
+        order.setTotalPayable(bill.getTotalAmount());
+
+        order.setPaidAmount(bill.getPaidAmount());
+        order.setPendingAmount(bill.getPendingAmount());
+        order.setBillDate(billDate);
+
+        order.setPaymentStatus(
+                bill.getPendingAmount() <= 0
+                        ? "PAID"
+                        : "CREDIT"
+        );
+
+        // Preserve the original checkout date and operator on edits.
+        if (isNewSale) {
+            order.setCheckoutBy(actualLoggedInUser);
+            order.setCheckoutDate(billDate.toString());
+            order.setCheckoutTime(checkoutTime);
+        }
+
+        // GST values here are percentages, not collected tax amounts.
+        // Do not treat them as monetary tax values.
+        List<Map<String, Object>> gstDetails = new ArrayList<>();
+
+        if (bill.getGstDetails() != null
+                && !bill.getGstDetails().isEmpty()) {
+
+            Map<String, Object> percentages = new HashMap<>();
+
+            bill.getGstDetails().forEach((key, value) ->
+                    percentages.put(key + "Percent", value)
+            );
+
+            gstDetails.add(percentages);
+        }
+
+        order.setGsttype(gstDetails);
+
+        return completeOrderRepository.save(order);
+    }
+
+    private void syncCreditBillPaymentToCompletedOrder(
+            String hotelId,
+            InstantCreditCustomer.CreditBill bill
+    ) {
+        if (bill == null || bill.getBillId() == null) {
+            return;
+        }
+
+        Optional<CompletedOrder> existingOrder =
+                completeOrderRepository.findByHotelIdAndCreditBillId(
+                        hotelId,
+                        bill.getBillId()
+                );
+
+        if (existingOrder.isEmpty()) {
+            log.warn(
+                    "No completed_orders record found for credit bill {} in hotel {}",
+                    bill.getBillId(),
+                    hotelId
+            );
+            return;
+        }
+
+        CompletedOrder order = existingOrder.get();
+
+        order.setPaidAmount(bill.getPaidAmount());
+        order.setPendingAmount(bill.getPendingAmount());
+
+        order.setPaymentStatus(
+                bill.getPendingAmount() <= 0
+                        ? "PAID"
+                        : "CREDIT"
+        );
+
+        completeOrderRepository.save(order);
+
+        log.info(
+                "Synced credit bill {}: paid={}, pending={}",
+                bill.getBillId(),
+                bill.getPaidAmount(),
+                bill.getPendingAmount()
+        );
+    }
+
+
+    private double getCommodityQuantity(
+            InstantCreditCustomer.CreditCommodity commodity
+    ) {
+        return commodity.getQuantity();
+    }
+
+    private Map<String, Document> aggregateCreditCommodities(
+            List<InstantCreditCustomer.CreditCommodity> commodities
+    ) {
+        Map<String, Document> result = new LinkedHashMap<>();
+
+        if (commodities == null) {
+            return result;
+        }
+
+        for (InstantCreditCustomer.CreditCommodity commodity : commodities) {
+            if (commodity == null
+                    || commodity.getId() == null
+                    || commodity.getId().trim().isEmpty()) {
+                continue;
+            }
+
+            String itemId = commodity.getId().trim();
+            double qty = getCommodityQuantity(commodity);
+
+            Document existing = result.get(itemId);
+
+            if (existing == null) {
+                result.put(
+                        itemId,
+                        new Document("itemId", itemId)
+                                .append(
+                                        "name",
+                                        commodity.getName() != null
+                                                ? commodity.getName()
+                                                : "Unknown Item"
+                                )
+                                .append(
+                                        "unit",
+                                        commodity.getUnit() != null
+                                                ? commodity.getUnit()
+                                                : "PIECE"
+                                )
+                                .append("qty", qty)
+                );
+            } else {
+                existing.put(
+                        "qty",
+                        ((Number) existing.get("qty")).doubleValue() + qty
+                );
+            }
+        }
+
+        return result;
+    }
+
+    private void syncCreditBillItemSummary(
+            String hotelId,
+            String billDate,
+            String billId,
+            List<InstantCreditCustomer.CreditCommodity> newCommodities
+    ) {
+        if (hotelId == null || billDate == null || billId == null) {
+            throw new IllegalArgumentException(
+                    "Hotel ID, bill date and bill ID are required"
+            );
+        }
+
+        String itemDocId = hotelId + "_" + billDate + "_ITEMS";
+
+        Query query = new Query(
+                Criteria.where("_id").is(itemDocId)
+        );
+
+        Document itemDoc = mongoTemplate.findById(
+                itemDocId,
+                Document.class,
+                "daily_item_summary"
+        );
+
+        Map<String, Document> newItems =
+                aggregateCreditCommodities(newCommodities);
+
+        List<Document> snapshots = itemDoc == null
+                ? new ArrayList<>()
+                : itemDoc.getList(
+                "creditBillSnapshots",
+                Document.class,
+                new ArrayList<>()
+        );
+
+        Document oldSnapshot = snapshots.stream()
+                .filter(s -> billId.equals(s.getString("billId")))
+                .findFirst()
+                .orElse(null);
+
+        Map<String, Document> oldItems = new LinkedHashMap<>();
+
+        if (oldSnapshot != null) {
+            List<Document> oldSnapshotItems =
+                    oldSnapshot.getList("items", Document.class);
+
+            if (oldSnapshotItems != null) {
+                for (Document item : oldSnapshotItems) {
+                    if (item.getString("itemId") != null) {
+                        oldItems.put(item.getString("itemId"), item);
+                    }
+                }
+            }
+        }
+
+        Set<String> affectedItemIds = new LinkedHashSet<>();
+        affectedItemIds.addAll(oldItems.keySet());
+        affectedItemIds.addAll(newItems.keySet());
+
+        double totalQtyDelta = 0.0;
+
+        for (String itemId : affectedItemIds) {
+            Document oldItem = oldItems.get(itemId);
+            Document newItem = newItems.get(itemId);
+
+            double oldQty = oldItem == null
+                    ? 0.0
+                    : ((Number) oldItem.get("qty")).doubleValue();
+
+            double newQty = newItem == null
+                    ? 0.0
+                    : ((Number) newItem.get("qty")).doubleValue();
+
+            double delta = newQty - oldQty;
+
+            totalQtyDelta += delta;
+
+            if (Math.abs(delta) < 0.000001) {
+                continue;
+            }
+
+            Query existingItemQuery = new Query(
+                    Criteria.where("_id").is(itemDocId)
+                            .and("items.itemId").is(itemId)
+            );
+
+            Update itemUpdate = new Update()
+                    .inc("totalQtySold", delta)
+                    .inc("items.$.qty", delta);
+
+            var result = mongoTemplate.updateFirst(
+                    existingItemQuery,
+                    itemUpdate,
+                    "daily_item_summary"
+            );
+
+            if (result.getMatchedCount() > 0) {
+                Query updatedItemQuery = new Query(
+                        Criteria.where("_id").is(itemDocId)
+                                .and("items.itemId").is(itemId)
+                );
+
+                Document updatedItemDoc = mongoTemplate.findOne(
+                        updatedItemQuery,
+                        Document.class,
+                        "daily_item_summary"
+                );
+
+                if (updatedItemDoc != null) {
+                    List<Document> updatedItems =
+                            updatedItemDoc.getList("items", Document.class);
+
+                    if (updatedItems != null) {
+                        for (Document updatedItem : updatedItems) {
+                            if (itemId.equals(updatedItem.getString("itemId"))) {
+                                Object qtyValue = updatedItem.get("qty");
+
+                                if (qtyValue instanceof Number
+                                        && ((Number) qtyValue).doubleValue() <= 0.000001) {
+
+                                    Query removeItemQuery = new Query(
+                                            Criteria.where("_id").is(itemDocId)
+                                    );
+
+                                    Update removeItemUpdate = new Update()
+                                            .pull(
+                                                    "items",
+                                                    new Document("itemId", itemId)
+                                            );
+
+                                    mongoTemplate.updateFirst(
+                                            removeItemQuery,
+                                            removeItemUpdate,
+                                            "daily_item_summary"
+                                    );
+                                }
+
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (result.getMatchedCount() == 0 && newQty > 0.0) {
+                Document itemToAdd = new Document(
+                        "itemId", itemId
+                ).append(
+                        "name", newItem.getString("name")
+                ).append(
+                        "unit", newItem.getString("unit")
+                ).append(
+                        "qty", newQty
+                );
+
+                Query baseQuery = new Query(
+                        Criteria.where("_id").is(itemDocId)
+                );
+
+                Update addItem = new Update()
+                        .setOnInsert("restaurantId", hotelId)
+                        .setOnInsert("date", billDate)
+                        .inc("totalQtySold", newQty)
+                        .push("items", itemToAdd);
+
+                mongoTemplate.upsert(
+                        baseQuery,
+                        addItem,
+                        "daily_item_summary"
+                );
+            }
+        }
+
+        // Replace this bill's snapshot with the latest commodities.
+        snapshots.removeIf(
+                s -> billId.equals(s.getString("billId"))
+        );
+
+        List<Document> snapshotItems = new ArrayList<>();
+
+        for (Document item : newItems.values()) {
+            snapshotItems.add(new Document(item));
+        }
+
+        snapshots.add(
+                new Document("billId", billId)
+                        .append("items", snapshotItems)
+        );
+
+        Query baseQuery = new Query(
+                Criteria.where("_id").is(itemDocId)
+        );
+
+        Update snapshotUpdate = new Update()
+                .set("creditBillSnapshots", snapshots)
+                .setOnInsert("restaurantId", hotelId)
+                .setOnInsert("date", billDate);
+
+        if (itemDoc == null) {
+            snapshotUpdate.setOnInsert("totalQtySold", totalQtyDelta);
+            snapshotUpdate.setOnInsert(
+                    "items",
+                    new ArrayList<Document>()
+            );
+        }
+
+        mongoTemplate.upsert(
+                baseQuery,
+                snapshotUpdate,
+                "daily_item_summary"
+        );
+    }
+
 }

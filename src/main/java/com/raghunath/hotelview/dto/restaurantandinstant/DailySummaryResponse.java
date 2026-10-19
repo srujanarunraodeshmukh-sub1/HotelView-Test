@@ -68,4 +68,18 @@ public class DailySummaryResponse {
         private Double qty;
         private Double totalAmount;
     }
+
+    private CreditBillSummaryDto creditBillSummary;
+
+    @Getter
+    @Setter
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @Builder
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class CreditBillSummaryDto {
+        private Double creditBillToday;
+        private Double creditPendingToday;
+        private Double creditReceivedToday;
+    }
 }
