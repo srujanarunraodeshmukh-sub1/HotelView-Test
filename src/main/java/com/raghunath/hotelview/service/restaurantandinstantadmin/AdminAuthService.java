@@ -302,23 +302,70 @@ public class AdminAuthService {
     }
 
     @CacheEvict(value = "dashboardStatsCache", key = "#hotelId")
-    public BusinessDetailsDTO updateBusinessDetails(String hotelId, BusinessDetailsDTO updates) {
+    public BusinessDetailsDTO updateBusinessDetails(
+            String hotelId,
+            BusinessDetailsDTO updates
+    ) {
         Admin admin = adminRepository.findByHotelId(hotelId)
-                .orElseThrow(() -> new RuntimeException("Admin not found with ID: " + hotelId));
+                .orElseThrow(() ->
+                        new RuntimeException(
+                                "Admin not found with ID: " + hotelId
+                        )
+                );
 
-        // Update ONLY the specified business fields
-        admin.setRestaurantName(updates.getRestaurantName());
-        admin.setRestaurantAddress(updates.getRestaurantAddress());
-        admin.setRestaurantContact(updates.getRestaurantContact());
-        admin.setRestaurantLogo(updates.getRestaurantLogo());
-        admin.setRestaurantUpi(updates.getRestaurantUpi());
+        // Update only fields provided in the request
+        if (updates.getRestaurantName() != null) {
+            admin.setRestaurantName(updates.getRestaurantName());
+        }
 
-        admin.setGstNumber(updates.getGstNumber());
-        admin.setGstDetails(updates.getGstDetails());
+        if (updates.getRestaurantAddress() != null) {
+            admin.setRestaurantAddress(updates.getRestaurantAddress());
+        }
 
-        // planType is NOT updated here
+        if (updates.getRestaurantContact() != null) {
+            admin.setRestaurantContact(updates.getRestaurantContact());
+        }
+
+        if (updates.getRestaurantLogo() != null) {
+            admin.setRestaurantLogo(updates.getRestaurantLogo());
+        }
+
+        if (updates.getRestaurantUpi() != null) {
+            admin.setRestaurantUpi(updates.getRestaurantUpi());
+        }
+
+        if (updates.getGstNumber() != null) {
+            admin.setGstNumber(updates.getGstNumber());
+        }
+
+        if (updates.getGstTaxMode() != null) {
+            admin.setGstTaxMode(updates.getGstTaxMode());
+        }
+
+        if (updates.getGstDetails() != null) {
+            admin.setGstDetails(updates.getGstDetails());
+        }
+
+        if (updates.getFssaiNumber() != null) {
+            admin.setFssaiNumber(updates.getFssaiNumber());
+        }
+
+        if (updates.getBankAccounts() != null) {
+            admin.setBankAccounts(
+                    updates.getBankAccounts().stream()
+                            .map(account -> BankAccount.builder()
+                                    .bankName(account.getBankName())
+                                    .accountNumber(account.getAccountNumber())
+                                    .ifscCode(account.getIfscCode())
+                                    .build())
+                            .toList()
+            );
+        }
+
+        // Do not update planType here
 
         Admin savedAdmin = adminRepository.save(admin);
+
         return mapToDTO(savedAdmin);
     }
 
@@ -409,6 +456,19 @@ public class AdminAuthService {
                 .planType(admin.getPlanType())
                 .gstNumber(admin.getGstNumber())
                 .gstDetails(admin.getGstDetails())
+                .gstTaxMode(admin.getGstTaxMode())
+                .fssaiNumber(admin.getFssaiNumber())
+                .bankAccounts(
+                        admin.getBankAccounts() == null
+                                ? new ArrayList<>()
+                                : admin.getBankAccounts().stream()
+                                .map(account -> BankAccountDTO.builder()
+                                        .bankName(account.getBankName())
+                                        .accountNumber(account.getAccountNumber())
+                                        .ifscCode(account.getIfscCode())
+                                        .build())
+                                .toList()
+                )
                 .build();
     }
 

@@ -58,7 +58,12 @@ public class Admin {
     private String restaurantUpi;
 
     private String gstNumber;
+    private String gstTaxMode;
     private List<GstDetailDTO> gstDetails;
+
+    private String fssaiNumber;
+
+    private List<BankAccount> bankAccounts;
 
     private String privacyPolicyStatus;
     private java.time.LocalDateTime privacyPolicySignedAt;

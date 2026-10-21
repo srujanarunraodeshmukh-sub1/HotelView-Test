@@ -290,7 +290,7 @@ public class InstantCreditBillController {
     public ResponseEntity<ReceivePaymentResponse> settleSpecificBill(
             @RequestHeader("Authorization") String authHeader,
             @PathVariable String billId,
-            @Valid @RequestBody ReceivePaymentRequest request) {
+            @Valid @RequestBody SettleSpecificBillRequest request) {
 
         userTypeAccessGuard.enforceUserTypeForCurrentUser("INSTANT");
 

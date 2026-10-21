@@ -2890,7 +2890,7 @@ public class InstantCreditBillService {
     public ReceivePaymentResponse settleSpecificBill(
             String hotelId,
             String billId,
-            ReceivePaymentRequest request,
+            SettleSpecificBillRequest request,
             String actualLoggedInUser
     ) {
 
@@ -2980,18 +2980,6 @@ public class InstantCreditBillService {
         }
 
         // --------------------------------------------------------
-        // Determine settlement order, like receivePayment()
-        // --------------------------------------------------------
-
-        InstantCreditCustomer.SettlementOrder order =
-                request.getSettlementOrder();
-
-        if (order == null) {
-            order =
-                    InstantCreditCustomer.SettlementOrder.OLDEST_FIRST;
-        }
-
-        // --------------------------------------------------------
         // Apply payment only to the specified bill
         // --------------------------------------------------------
 
@@ -3055,7 +3043,9 @@ public class InstantCreditBillService {
         billPayment.setAmountReceived(amountReceived);
         billPayment.setPaymentDate(LocalDate.now());
         billPayment.setReceivedAt(paymentTime);
-        billPayment.setSettlementOrder(order);
+        billPayment.setSettlementOrder(
+                InstantCreditCustomer.SettlementOrder.OLDEST_FIRST
+        );
 
         billPayment.setAllocations(
                 new ArrayList<>(
@@ -3098,7 +3088,9 @@ public class InstantCreditBillService {
         ledgerPayment.setAmountReceived(amountReceived);
         ledgerPayment.setPaymentDate(LocalDate.now());
         ledgerPayment.setReceivedAt(paymentTime);
-        ledgerPayment.setSettlementOrder(order);
+        ledgerPayment.setSettlementOrder(
+                InstantCreditCustomer.SettlementOrder.OLDEST_FIRST
+        );
 
         ledgerPayment.setAllocations(ledgerAllocations);
 

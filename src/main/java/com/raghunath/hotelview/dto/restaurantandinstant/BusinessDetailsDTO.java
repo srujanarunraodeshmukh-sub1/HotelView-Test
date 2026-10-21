@@ -18,4 +18,6 @@ public class BusinessDetailsDTO {
     private String gstNumber;
     private String gstTaxMode;
     private List<GstDetailDTO> gstDetails;
+    private String fssaiNumber;
+    private List<BankAccountDTO> bankAccounts;
 }
