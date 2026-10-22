@@ -43,6 +43,8 @@ public class CreateCreditBillRequest {
     @Valid
     private List<CommodityRequest> commodities;
 
+    private Map<String, Double> extraCharges;
+
     private Double grossTotal;
     private Map<String, Double> gstDetails;
 }

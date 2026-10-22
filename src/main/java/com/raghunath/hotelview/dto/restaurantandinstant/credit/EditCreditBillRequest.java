@@ -25,6 +25,8 @@ public class EditCreditBillRequest {
     @PositiveOrZero(message = "Gross total cannot be negative")
     private Double grossTotal;
 
+    private Map<String, Double> extraCharges;
+
     private Map<String, Double> gstDetails;
 
     private String editReason;

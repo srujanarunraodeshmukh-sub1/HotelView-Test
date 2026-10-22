@@ -695,6 +695,12 @@ public class InstantCreditBillService {
                         : new HashMap<>()
         );
 
+        bill.setExtraCharges(
+                request.getExtraCharges() != null
+                        ? new HashMap<>(request.getExtraCharges())
+                        : new HashMap<>()
+        );
+
         bill.setTotalAmount(
                 totalAmount
         );
@@ -1670,6 +1676,12 @@ public class InstantCreditBillService {
         if (request.getGrossTotal() != null) {
             bill.setGrossTotal(
                     money(request.getGrossTotal())
+            );
+        }
+
+        if (request.getExtraCharges() != null) {
+            bill.setExtraCharges(
+                    new HashMap<>(request.getExtraCharges())
             );
         }
 
@@ -2721,6 +2733,13 @@ public class InstantCreditBillService {
         response.setGstDetails(
                 bill.getGstDetails() != null
                         ? new HashMap<>(bill.getGstDetails())
+                        : new HashMap<>()
+        );
+
+
+        response.setExtraCharges(
+                bill.getExtraCharges() != null
+                        ? new HashMap<>(bill.getExtraCharges())
                         : new HashMap<>()
         );
 
