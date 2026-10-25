@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -13,7 +15,7 @@ public class AdminProfileDTO {
     private String name;
     private String mobile;
     private String alternateMobile;
-    private String emailId;
+    private List<String> email;
     private String restaurantUpi;
     private String address;
     private String subscriptionExpiry;

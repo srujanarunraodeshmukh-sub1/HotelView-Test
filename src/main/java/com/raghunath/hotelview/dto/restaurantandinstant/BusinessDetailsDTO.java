@@ -20,4 +20,5 @@ public class BusinessDetailsDTO {
     private List<GstDetailDTO> gstDetails;
     private String fssaiNumber;
     private List<BankAccountDTO> bankAccounts;
+    private List<String> email;
 }

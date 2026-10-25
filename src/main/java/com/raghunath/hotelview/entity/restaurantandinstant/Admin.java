@@ -32,7 +32,7 @@ public class Admin {
 
     private String password;
 
-    private String emailId;
+    private List<String> email;
 
     private String address;
 

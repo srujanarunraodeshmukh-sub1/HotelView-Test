@@ -459,9 +459,27 @@ public class InstantCreditBillService {
                         ? new HashMap<>(request.getGstDetails())
                         : new HashMap<>();
 
-        double totalAmount =
-                money(request.getTotalAmount());
+        double discount = request.getDiscount() != null
+                ? money(request.getDiscount())
+                : 0.0;
 
+        if (discount < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Discount cannot be negative"
+            );
+        }
+
+        double totalAmount = money(
+                request.getTotalAmount() - discount
+        );
+
+        if (totalAmount < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Discount cannot exceed the amount before discount"
+            );
+        }
 
         double paidAmount =
                 money(request.getPaidAmount());
@@ -701,6 +719,12 @@ public class InstantCreditBillService {
                         : new HashMap<>()
         );
 
+        bill.setDiscount(
+                request.getDiscount() != null
+                        ? money(request.getDiscount())
+                        : 0.0
+        );
+
         bill.setTotalAmount(
                 totalAmount
         );
@@ -832,7 +856,6 @@ public class InstantCreditBillService {
                 bill
         );
     }
-
 
 
     // ============================================================
@@ -1502,15 +1525,7 @@ public class InstantCreditBillService {
                 "Paid amount"
         );
 
-        double totalAmount =
-                money(
-                        request.getTotalAmount()
-                );
-
-        double paidAmount =
-                money(
-                        request.getPaidAmount()
-                );
+        double paidAmount = money(request.getPaidAmount());
 
 
         /*
@@ -1554,14 +1569,6 @@ public class InstantCreditBillService {
             }
         }
 
-        if (paidAmount > totalAmount) {
-
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Paid amount cannot be greater than total amount"
-            );
-        }
-
         InstantCreditCustomer customer =
                 findCustomerContainingBill(
                         hotelId,
@@ -1595,6 +1602,35 @@ public class InstantCreditBillService {
 
         InstantCreditCustomer.CreditBill bill =
                 billEntry.getBill();
+
+        double discount = request.getDiscount() != null
+                ? money(request.getDiscount())
+                : money(bill.getDiscount());
+
+        if (discount < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Discount cannot be negative"
+            );
+        }
+
+        double totalAmount = money(
+                request.getTotalAmount() - discount
+        );
+
+        if (totalAmount < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Discount cannot exceed the amount before discount"
+            );
+        }
+
+        if (paidAmount > totalAmount) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Paid amount cannot be greater than total amount"
+            );
+        }
 
         double previousTotalAmount = bill.getTotalAmount();
 
@@ -1690,6 +1726,8 @@ public class InstantCreditBillService {
                     new HashMap<>(request.getGstDetails())
             );
         }
+
+        bill.setDiscount(discount);
 
         double pendingAmount =
                 money(
@@ -2741,6 +2779,10 @@ public class InstantCreditBillService {
                 bill.getExtraCharges() != null
                         ? new HashMap<>(bill.getExtraCharges())
                         : new HashMap<>()
+        );
+
+        response.setDiscount(
+                money(bill.getDiscount())
         );
 
 

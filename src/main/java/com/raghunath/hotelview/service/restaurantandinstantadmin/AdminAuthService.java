@@ -247,7 +247,7 @@ public class AdminAuthService {
                 .name(admin.getName())
                 .mobile(admin.getMobile())
                 .alternateMobile(admin.getAlternateMobile())
-                .emailId(admin.getEmailId())
+                .email(admin.getEmail())
                 .restaurantUpi(admin.getRestaurantUpi())
                 .restaurantName(admin.getRestaurantName())
                 .address(admin.getAddress())
@@ -268,7 +268,7 @@ public class AdminAuthService {
                 .name(admin.getName())
                 .mobile(admin.getMobile())
                 .alternateMobile(admin.getAlternateMobile())
-                .emailId(admin.getEmailId())
+                .email(admin.getEmail())
                 .restaurantUpi(admin.getRestaurantUpi())
                 .address(admin.getAddress())
                 .subscriptionExpiry(admin.getSubscriptionExpiry() != null
@@ -278,19 +278,39 @@ public class AdminAuthService {
                 .build();
     }
 
-    public String updateProfile(String hotelId, AdminProfileDTO updates) {
-        Admin admin = adminRepository.findByHotelId(hotelId)
-                .orElseThrow(() -> new RuntimeException("Admin profile not found"));
 
-        admin.setName(updates.getName());
-        admin.setAlternateMobile(updates.getAlternateMobile());
-        admin.setEmailId(updates.getEmailId());
-        admin.setRestaurantUpi(updates.getRestaurantUpi());
-        admin.setAddress(updates.getAddress());
+    public String updateProfile(String hotelId, AdminProfileDTO updates) {
+
+        Admin admin = adminRepository.findByHotelId(hotelId)
+                .orElseThrow(() ->
+                        new RuntimeException("Admin profile not found"));
+
+        // Update only the fields provided in the request
+        if (updates.getName() != null) {
+            admin.setName(updates.getName());
+        }
+
+        if (updates.getAlternateMobile() != null) {
+            admin.setAlternateMobile(updates.getAlternateMobile());
+        }
+
+        if (updates.getEmail() != null) {
+            admin.setEmail(updates.getEmail());
+        }
+
+        if (updates.getRestaurantUpi() != null) {
+            admin.setRestaurantUpi(updates.getRestaurantUpi());
+        }
+
+        if (updates.getAddress() != null) {
+            admin.setAddress(updates.getAddress());
+        }
 
         adminRepository.save(admin);
+
         return "Profile updated successfully";
     }
+
 
     // Inside AdminService.java
 
@@ -324,6 +344,10 @@ public class AdminAuthService {
 
         if (updates.getRestaurantContact() != null) {
             admin.setRestaurantContact(updates.getRestaurantContact());
+        }
+
+        if (updates.getEmail() != null) {
+            admin.setEmail(updates.getEmail());
         }
 
         if (updates.getRestaurantLogo() != null) {
@@ -451,6 +475,7 @@ public class AdminAuthService {
                 .restaurantName(admin.getRestaurantName())
                 .restaurantAddress(admin.getRestaurantAddress())
                 .restaurantContact(admin.getRestaurantContact())
+                .email(admin.getEmail())
                 .restaurantLogo(admin.getRestaurantLogo())
                 .restaurantUpi(admin.getRestaurantUpi())
                 .planType(admin.getPlanType())

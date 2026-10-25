@@ -29,6 +29,9 @@ public class EditCreditBillRequest {
 
     private Map<String, Double> gstDetails;
 
+    @PositiveOrZero(message = "Discount cannot be negative")
+    private Double discount;
+
     private String editReason;
 
     @Valid

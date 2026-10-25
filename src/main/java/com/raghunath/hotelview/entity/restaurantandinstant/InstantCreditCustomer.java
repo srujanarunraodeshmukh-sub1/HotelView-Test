@@ -129,6 +129,8 @@ public class InstantCreditCustomer {
 
         private Map<String, Double> extraCharges = new HashMap<>();
 
+        private double discount;
+
         private double totalAmount;
 
         private double paidAmount;

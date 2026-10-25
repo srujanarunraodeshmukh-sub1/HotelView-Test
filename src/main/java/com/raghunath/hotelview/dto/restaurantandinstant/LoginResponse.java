@@ -3,6 +3,8 @@ package com.raghunath.hotelview.dto.restaurantandinstant;
 import lombok.Builder;
 import lombok.Getter;
 
+import java.util.List;
+
 @Getter
 @Builder
 public class LoginResponse {
@@ -16,7 +18,7 @@ public class LoginResponse {
     private String name;
     private String mobile;
     private String alternateMobile;
-    private String emailId;
+    private List<String> email;
     private String restaurantUpi;
     private String restaurantName;
     private String address;

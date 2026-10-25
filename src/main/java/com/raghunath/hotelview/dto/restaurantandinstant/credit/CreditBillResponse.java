@@ -29,6 +29,8 @@ public class CreditBillResponse {
 
     private Map<String, Double> extraCharges;
 
+    private double discount;
+
     private double totalAmount;
 
     private double paidAmount;

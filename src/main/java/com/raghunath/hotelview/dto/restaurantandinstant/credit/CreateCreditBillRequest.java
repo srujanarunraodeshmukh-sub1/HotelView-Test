@@ -45,6 +45,9 @@ public class CreateCreditBillRequest {
 
     private Map<String, Double> extraCharges;
 
+    @PositiveOrZero(message = "Discount cannot be negative")
+    private Double discount;
+
     private Double grossTotal;
     private Map<String, Double> gstDetails;
 }
