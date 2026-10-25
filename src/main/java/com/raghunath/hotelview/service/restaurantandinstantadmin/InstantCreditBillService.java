@@ -3784,4 +3784,359 @@ public class InstantCreditBillService {
         );
     }
 
+    // ============================================================
+// PERMANENTLY DELETE ONE CREDIT BILL
+// ============================================================
+
+    public void deleteCreditBill(
+            String hotelId,
+            String billId
+    ) {
+        if (hotelId == null || hotelId.isBlank()
+                || billId == null || billId.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Hotel ID and bill ID are required"
+            );
+        }
+
+        // Locate the customer and bill in active customer records.
+        InstantCreditCustomer customer = customerRepository
+                .findByHotelIdOrderByNameAsc(hotelId)
+                .stream()
+                .filter(c -> c.getCreditEntries() != null)
+                .filter(c -> c.getCreditEntries().stream().anyMatch(e ->
+                        e != null
+                                && e.getEntryType()
+                                == InstantCreditCustomer.EntryType.CREDIT_BILL
+                                && e.getBill() != null
+                                && billId.equals(e.getBill().getBillId())
+                ))
+                .findFirst()
+                .orElse(null);
+
+        // If not in active entries, search completed bill history.
+        InstantCreditCompletedBills history = null;
+
+        if (customer == null) {
+            history = completedBillsRepository
+                    .findByHotelIdOrderByUpdatedAtDesc(hotelId)
+                    .stream()
+                    .filter(h -> h.getCompletedEntries() != null)
+                    .filter(h -> h.getCompletedEntries().stream().anyMatch(e ->
+                            e != null
+                                    && e.getEntryType()
+                                    == InstantCreditCustomer.EntryType.CREDIT_BILL
+                                    && e.getBill() != null
+                                    && billId.equals(e.getBill().getBillId())
+                    ))
+                    .findFirst()
+                    .orElse(null);
+
+            if (history != null) {
+                customer = customerRepository
+                        .findByIdAndHotelId(
+                                history.getCustomerId(),
+                                hotelId
+                        )
+                        .orElse(null);
+            }
+        }
+
+        if (customer == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Credit bill not found"
+            );
+        }
+
+        final InstantCreditCustomer targetCustomer = customer;
+
+        InstantCreditCustomer.CreditBill bill =
+                findCreditBillInCustomer(targetCustomer, billId);
+
+        if (bill == null && history != null
+                && history.getCompletedEntries() != null) {
+            bill = history.getCompletedEntries()
+                    .stream()
+                    .filter(e -> e != null
+                            && e.getEntryType()
+                            == InstantCreditCustomer.EntryType.CREDIT_BILL
+                            && e.getBill() != null
+                            && billId.equals(e.getBill().getBillId()))
+                    .map(InstantCreditCustomer.CreditEntry::getBill)
+                    .findFirst()
+                    .orElse(null);
+        }
+
+        if (bill == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Credit bill not found"
+            );
+        }
+
+        String billDate = getCreditSummaryDate(bill);
+        double totalAmount = money(bill.getTotalAmount());
+        double pendingAmount = money(bill.getPendingAmount());
+
+        // 1. Reverse the original bill's sales and pending analytics.
+        updateCreditBillSummary(
+                hotelId,
+                billDate,
+                -totalAmount,
+                -pendingAmount,
+                0.0
+        );
+
+        // 2. Remove the deleted bill's quantities from item analytics.
+        syncCreditBillItemSummary(
+                hotelId,
+                billDate,
+                billId,
+                Collections.emptyList()
+        );
+
+        // 3. Remove this bill from the customer's active ledger.
+        if (targetCustomer.getCreditEntries() != null) {
+            targetCustomer.getCreditEntries().removeIf(entry ->
+                    entry != null
+                            && entry.getEntryType()
+                            == InstantCreditCustomer.EntryType.CREDIT_BILL
+                            && entry.getBill() != null
+                            && billId.equals(entry.getBill().getBillId())
+            );
+
+            // Keep received-payment entries, but remove allocations
+            // pointing to the permanently deleted bill.
+            removeBillAllocations(
+                    targetCustomer.getCreditEntries(),
+                    billId
+            );
+        }
+
+        targetCustomer.setUpdatedAt(LocalDateTime.now());
+
+        if (!hasActivePendingBills(targetCustomer)) {
+            targetCustomer.setActive(false);
+        }
+
+        customerRepository.save(targetCustomer);
+
+        // 4. Remove the bill and its allocations from completed history.
+        Optional<InstantCreditCompletedBills> existingHistory =
+                completedBillsRepository.findByHotelIdAndCustomerId(
+                        hotelId,
+                        targetCustomer.getId()
+                );
+
+        if (existingHistory.isPresent()) {
+            InstantCreditCompletedBills completedHistory =
+                    existingHistory.get();
+
+            if (completedHistory.getCompletedEntries() != null) {
+                completedHistory.getCompletedEntries().removeIf(entry ->
+                        entry != null
+                                && entry.getEntryType()
+                                == InstantCreditCustomer.EntryType.CREDIT_BILL
+                                && entry.getBill() != null
+                                && billId.equals(entry.getBill().getBillId())
+                );
+
+                removeBillAllocations(
+                        completedHistory.getCompletedEntries(),
+                        billId
+                );
+            }
+
+            completedHistory.setUpdatedAt(LocalDateTime.now());
+
+            completedBillsRepository.save(completedHistory);
+        }
+
+        // 5. Permanently remove the associated completed-order record.
+        Query completedOrderQuery = new Query(
+                Criteria.where("hotelId").is(hotelId)
+                        .and("creditBillId").is(billId)
+        );
+
+        mongoTemplate.remove(
+                completedOrderQuery,
+                CompletedOrder.class
+        );
+
+        log.info(
+                "Permanently deleted credit bill {} for hotel {}",
+                billId,
+                hotelId
+        );
+    }
+
+
+// ============================================================
+// PERMANENTLY DELETE A CUSTOMER AND THEIR CREDIT HISTORY
+// ============================================================
+
+    public void deleteCreditCustomer(
+            String hotelId,
+            String customerId
+    ) {
+        if (hotelId == null || hotelId.isBlank()
+                || customerId == null || customerId.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Hotel ID and customer ID are required"
+            );
+        }
+
+        InstantCreditCustomer customer = customerRepository
+                .findByIdAndHotelId(customerId, hotelId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Credit customer not found"
+                ));
+
+        // Include bill records from both the active ledger and history.
+        Map<String, InstantCreditCustomer.CreditBill> billsById =
+                new LinkedHashMap<>();
+
+        if (customer.getCreditEntries() != null) {
+            customer.getCreditEntries().stream()
+                    .filter(Objects::nonNull)
+                    .filter(e -> e.getEntryType()
+                            == InstantCreditCustomer.EntryType.CREDIT_BILL)
+                    .map(InstantCreditCustomer.CreditEntry::getBill)
+                    .filter(Objects::nonNull)
+                    .filter(b -> b.getBillId() != null)
+                    .forEach(b -> billsById.put(b.getBillId(), b));
+        }
+
+        Optional<InstantCreditCompletedBills> historyOptional =
+                completedBillsRepository.findByHotelIdAndCustomerId(
+                        hotelId,
+                        customerId
+                );
+
+        if (historyOptional.isPresent()) {
+            InstantCreditCompletedBills history = historyOptional.get();
+
+            if (history.getCompletedEntries() != null) {
+                history.getCompletedEntries().stream()
+                        .filter(Objects::nonNull)
+                        .filter(e -> e.getEntryType()
+                                == InstantCreditCustomer.EntryType.CREDIT_BILL)
+                        .map(InstantCreditCustomer.CreditEntry::getBill)
+                        .filter(Objects::nonNull)
+                        .filter(b -> b.getBillId() != null)
+                        .forEach(b -> billsById.putIfAbsent(
+                                b.getBillId(),
+                                b
+                        ));
+            }
+        }
+
+        // Reverse analytics and remove related completed orders for each bill.
+        for (Map.Entry<String, InstantCreditCustomer.CreditBill> item
+                : billsById.entrySet()) {
+
+            String billId = item.getKey();
+            InstantCreditCustomer.CreditBill bill = item.getValue();
+
+            String billDate = getCreditSummaryDate(bill);
+
+            updateCreditBillSummary(
+                    hotelId,
+                    billDate,
+                    -money(bill.getTotalAmount()),
+                    -money(bill.getPendingAmount()),
+                    0.0
+            );
+
+            syncCreditBillItemSummary(
+                    hotelId,
+                    billDate,
+                    billId,
+                    Collections.emptyList()
+            );
+
+            Query completedOrderQuery = new Query(
+                    Criteria.where("hotelId").is(hotelId)
+                            .and("creditBillId").is(billId)
+            );
+
+            mongoTemplate.remove(
+                    completedOrderQuery,
+                    CompletedOrder.class
+            );
+        }
+
+        // Permanently remove completed history for this customer.
+        historyOptional.ifPresent(
+                completedBillsRepository::delete
+        );
+
+        // Permanently remove the customer document.
+        customerRepository.delete(customer);
+
+        log.info(
+                "Permanently deleted credit customer {} and {} credit bills for hotel {}",
+                customerId,
+                billsById.size(),
+                hotelId
+        );
+    }
+
+
+// ============================================================
+// FIND A BILL IN THE ACTIVE CUSTOMER LEDGER
+// ============================================================
+
+    private InstantCreditCustomer.CreditBill findCreditBillInCustomer(
+            InstantCreditCustomer customer,
+            String billId
+    ) {
+        if (customer == null || customer.getCreditEntries() == null) {
+            return null;
+        }
+
+        return customer.getCreditEntries()
+                .stream()
+                .filter(Objects::nonNull)
+                .filter(entry -> entry.getEntryType()
+                        == InstantCreditCustomer.EntryType.CREDIT_BILL)
+                .map(InstantCreditCustomer.CreditEntry::getBill)
+                .filter(Objects::nonNull)
+                .filter(bill -> billId.equals(bill.getBillId()))
+                .findFirst()
+                .orElse(null);
+    }
+
+
+// ============================================================
+// REMOVE ALLOCATIONS REFERENCING A DELETED BILL
+// ============================================================
+
+    private void removeBillAllocations(
+            List<InstantCreditCustomer.CreditEntry> entries,
+            String billId
+    ) {
+        if (entries == null || billId == null) {
+            return;
+        }
+
+        for (InstantCreditCustomer.CreditEntry entry : entries) {
+            if (entry == null
+                    || entry.getEntryType()
+                    != InstantCreditCustomer.EntryType.RECEIVE_PAYMENT
+                    || entry.getPayment() == null
+                    || entry.getPayment().getAllocations() == null) {
+                continue;
+            }
+
+            entry.getPayment().getAllocations().removeIf(
+                    allocation -> allocation != null
+                            && billId.equals(allocation.getBillId())
+            );
+        }
+    }
 }

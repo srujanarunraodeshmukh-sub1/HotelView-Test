@@ -324,4 +324,29 @@ public class InstantCreditBillController {
                 creditBillService.getAllHistory(hotelId)
         );
     }
+
+    @DeleteMapping("/{billId}")
+    public ResponseEntity<Void> deleteCreditBill(
+            @PathVariable String billId
+    ) {
+        String hotelId = getHotelId();
+
+        creditBillService.deleteCreditBill(hotelId, billId);
+
+        return ResponseEntity.noContent().build();
+    }
+
+    @DeleteMapping("/customers/{customerId}")
+    public ResponseEntity<Void> deleteCreditCustomer(
+            @PathVariable String customerId
+    ) {
+        String hotelId = getHotelId();
+
+        creditBillService.deleteCreditCustomer(
+                hotelId,
+                customerId
+        );
+
+        return ResponseEntity.noContent().build();
+    }
 }
