@@ -68,6 +68,8 @@ public class CompletedOrderService {
                     .customerName(order.getCustomerName())
                     .customerMobile(order.getCustomerMobile())
                     .totalPayable(order.getTotalPayable())
+                    .pendingAmount(order.getPendingAmount())
+                    .paidAmount(order.getPaidAmount())
                     .checkoutAt(dateTimeFallback)
                     .build();
         });

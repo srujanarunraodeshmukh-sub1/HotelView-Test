@@ -125,6 +125,8 @@ public class InstantCreditCustomer {
 
         private double grossTotal;
 
+        private Map<String, Double> gstAmounts;
+
         private Map<String, Double> gstDetails;
 
         private Map<String, Double> extraCharges = new HashMap<>();

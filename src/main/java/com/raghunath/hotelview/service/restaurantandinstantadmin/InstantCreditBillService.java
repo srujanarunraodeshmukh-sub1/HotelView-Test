@@ -459,27 +459,6 @@ public class InstantCreditBillService {
                         ? new HashMap<>(request.getGstDetails())
                         : new HashMap<>();
 
-        double discount = request.getDiscount() != null
-                ? money(request.getDiscount())
-                : 0.0;
-
-        if (discount < 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Discount cannot be negative"
-            );
-        }
-
-        double totalAmount = money(
-                request.getTotalAmount() - discount
-        );
-
-        if (totalAmount < 0) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Discount cannot exceed the amount before discount"
-            );
-        }
 
         double paidAmount =
                 money(request.getPaidAmount());
@@ -519,6 +498,66 @@ public class InstantCreditBillService {
             }
         }
 
+        // --------------------------------------------------------
+// Server-side calculation: discount -> GST -> extra charges
+// --------------------------------------------------------
+        double discount = request.getDiscount() != null
+                ? money(request.getDiscount())
+                : 0.0;
+
+        if (discount < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Discount cannot be negative");
+        }
+
+        if (discount > grossTotal) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Discount cannot exceed the gross total");
+        }
+
+// 1. Deduct discount
+        double discountedAmount = money(grossTotal - discount);
+
+// 2. Add GST (percentages applied on the discounted amount)
+        Map<String, Double> gstAmounts = new HashMap<>();
+        double gstAmount = 0.0;
+        for (Map.Entry<String, Double> gstEntry : gstDetails.entrySet()) {
+            double part = money(discountedAmount * gstEntry.getValue() / 100.0);
+            gstAmounts.put(gstEntry.getKey(), part);
+            gstAmount += part;
+        }
+        gstAmount = money(gstAmount);
+
+// 3. Add extra charges (validated)
+        Map<String, Double> extraCharges =
+                request.getExtraCharges() != null
+                        ? new HashMap<>(request.getExtraCharges())
+                        : new HashMap<>();
+
+        double extraChargesTotal = 0.0;
+        for (Map.Entry<String, Double> charge : extraCharges.entrySet()) {
+            if (charge.getKey() == null || charge.getKey().isBlank()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Extra charge name cannot be empty");
+            }
+            if (charge.getValue() == null || charge.getValue() < 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        charge.getKey() + " cannot be negative");
+            }
+            extraChargesTotal += charge.getValue();
+        }
+        extraChargesTotal = money(extraChargesTotal);
+
+        double totalAmount = money(discountedAmount + gstAmount + extraChargesTotal);
+
+// Cross-check against what the frontend sent (1 rupee tolerance for rounding)
+        if (Math.abs(totalAmount - money(request.getTotalAmount())) > 1.0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Total mismatch. Calculated: " + totalAmount
+                            + ", received: " + money(request.getTotalAmount()));
+        }
 
         if (paidAmount > totalAmount) {
             throw new ResponseStatusException(
@@ -665,7 +704,7 @@ public class InstantCreditBillService {
         }
 
         LocalDateTime now =
-                LocalDateTime.now();
+                LocalDateTime.now(INDIA_ZONE);
 
         // --------------------------------------------------------
         // Build commodities
@@ -696,9 +735,9 @@ public class InstantCreditBillService {
                 UUID.randomUUID().toString()
         );
 
-        bill.setBillDate(
-                LocalDate.now()
-        );
+        LocalDate today = LocalDate.now(INDIA_ZONE);
+
+        bill.setBillDate(today);
 
         bill.setCreatedAt(now);
 
@@ -713,17 +752,11 @@ public class InstantCreditBillService {
                         : new HashMap<>()
         );
 
-        bill.setExtraCharges(
-                request.getExtraCharges() != null
-                        ? new HashMap<>(request.getExtraCharges())
-                        : new HashMap<>()
-        );
+        bill.setGstAmounts(gstAmounts);
 
-        bill.setDiscount(
-                request.getDiscount() != null
-                        ? money(request.getDiscount())
-                        : 0.0
-        );
+        bill.setExtraCharges(extraCharges);
+
+        bill.setDiscount(discount);
 
         bill.setTotalAmount(
                 totalAmount
@@ -775,9 +808,7 @@ public class InstantCreditBillService {
                 InstantCreditCustomer.EntryType.CREDIT_BILL
         );
 
-        entry.setTransactionDate(
-                LocalDate.now()
-        );
+        entry.setTransactionDate(today);
 
         entry.setTransactionTime(now);
 
@@ -839,9 +870,17 @@ public class InstantCreditBillService {
         updateCreditBillSummary(
                 hotelId,
                 summaryDate,
+                actualLoggedInUser,
                 bill.getTotalAmount(),    // Credit bill sales increase
                 bill.getPendingAmount(),  // Outstanding balance increase
                 bill.getPaidAmount()      // Include initial payment received today
+        );
+
+        updateCreditGstSummary(
+                hotelId,
+                summaryDate,
+                actualLoggedInUser,
+                gstAmounts
         );
 
         syncCreditBillItemSummary(
@@ -1461,6 +1500,7 @@ public class InstantCreditBillService {
         updateCreditBillSummary(
                 hotelId,
                 today,
+                actualLoggedInUser,
                 0.0,                  // Do not count another sale
                 money(pendingTodayDelta),
                 amountReceived        // Payment received today
@@ -1603,26 +1643,75 @@ public class InstantCreditBillService {
         InstantCreditCustomer.CreditBill bill =
                 billEntry.getBill();
 
+        // Use the request value if sent, otherwise keep the bill's existing value.
+        double newGrossTotal = request.getGrossTotal() != null
+                ? money(request.getGrossTotal())
+                : money(bill.getGrossTotal());
+
+        Map<String, Double> newGstDetails =
+                request.getGstDetails() != null
+                        ? new HashMap<>(request.getGstDetails())
+                        : (bill.getGstDetails() != null
+                        ? new HashMap<>(bill.getGstDetails())
+                        : new HashMap<>());
+
+        Map<String, Double> newExtraCharges =
+                request.getExtraCharges() != null
+                        ? new HashMap<>(request.getExtraCharges())
+                        : (bill.getExtraCharges() != null
+                        ? new HashMap<>(bill.getExtraCharges())
+                        : new HashMap<>());
+
         double discount = request.getDiscount() != null
                 ? money(request.getDiscount())
                 : money(bill.getDiscount());
 
         if (discount < 0) {
             throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Discount cannot be negative"
-            );
+                    HttpStatus.BAD_REQUEST, "Discount cannot be negative");
         }
 
-        double totalAmount = money(
-                request.getTotalAmount() - discount
-        );
+        if (discount > newGrossTotal) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Discount cannot exceed the gross total");
+        }
 
-        if (totalAmount < 0) {
+// 1. Deduct discount
+        double discountedAmount = money(newGrossTotal - discount);
+
+// 2. Add GST on the discounted amount
+        Map<String, Double> newGstAmounts = new HashMap<>();
+        double gstAmount = 0.0;
+        for (Map.Entry<String, Double> gstEntry : newGstDetails.entrySet()) {
+            double part = money(discountedAmount * gstEntry.getValue() / 100.0);
+            newGstAmounts.put(gstEntry.getKey(), part);
+            gstAmount += part;
+        }
+        gstAmount = money(gstAmount);
+
+// 3. Add extra charges
+        double extraChargesTotal = 0.0;
+        for (Map.Entry<String, Double> charge : newExtraCharges.entrySet()) {
+            if (charge.getKey() == null || charge.getKey().isBlank()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "Extra charge name cannot be empty");
+            }
+            if (charge.getValue() == null || charge.getValue() < 0) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        charge.getKey() + " cannot be negative");
+            }
+            extraChargesTotal += charge.getValue();
+        }
+        extraChargesTotal = money(extraChargesTotal);
+
+        double totalAmount = money(discountedAmount + gstAmount + extraChargesTotal);
+
+        if (Math.abs(totalAmount - money(request.getTotalAmount())) > 1.0) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "Discount cannot exceed the amount before discount"
-            );
+                    "Total mismatch. Calculated: " + totalAmount
+                            + ", received: " + money(request.getTotalAmount()));
         }
 
         if (paidAmount > totalAmount) {
@@ -1633,6 +1722,8 @@ public class InstantCreditBillService {
         }
 
         double previousTotalAmount = bill.getTotalAmount();
+
+        Map<String, Double> oldGstAmounts = bill.getGstAmounts();
 
         double previousPaidAmount = bill.getPaidAmount();
 
@@ -1709,23 +1800,10 @@ public class InstantCreditBillService {
 
 
         // Update GST fields only when supplied by the frontend.
-        if (request.getGrossTotal() != null) {
-            bill.setGrossTotal(
-                    money(request.getGrossTotal())
-            );
-        }
-
-        if (request.getExtraCharges() != null) {
-            bill.setExtraCharges(
-                    new HashMap<>(request.getExtraCharges())
-            );
-        }
-
-        if (request.getGstDetails() != null) {
-            bill.setGstDetails(
-                    new HashMap<>(request.getGstDetails())
-            );
-        }
+        bill.setGrossTotal(newGrossTotal);
+        bill.setExtraCharges(newExtraCharges);
+        bill.setGstDetails(newGstDetails);
+        bill.setGstAmounts(newGstAmounts);
 
         bill.setDiscount(discount);
 
@@ -1818,6 +1896,7 @@ public class InstantCreditBillService {
         updateCreditBillSummary(
                 hotelId,
                 billDateBeforeEdit,
+                bill.getCreatedById(),   // add
                 totalDelta,
                 pendingDelta,
                 0.0
@@ -1827,9 +1906,17 @@ public class InstantCreditBillService {
         updateCreditBillSummary(
                 hotelId,
                 today,
+                actualLoggedInUser,
                 0.0,
                 0.0,
                 receivedDelta
+        );
+
+        updateCreditGstSummary(
+                hotelId,
+                billDateBeforeEdit,
+                bill.getCreatedById(),
+                gstDifference(newGstAmounts, oldGstAmounts)
         );
 
         syncCreditBillItemSummary(
@@ -3217,6 +3304,7 @@ public class InstantCreditBillService {
         updateCreditBillSummary(
                 hotelId,
                 today,
+                actualLoggedInUser,
                 0.0, // Do not count another sale
                 originalBillDate.equals(today) ? pendingDelta : 0.0,
                 amountReceived
@@ -3317,6 +3405,7 @@ public class InstantCreditBillService {
     private void updateCreditBillSummary(
             String hotelId,
             String date,
+            String userId,
             double billTodayDelta,
             double pendingTodayDelta,
             double receivedTodayDelta
@@ -3327,27 +3416,110 @@ public class InstantCreditBillService {
                 Criteria.where("_id").is(documentId)
         );
 
+        String userPath =
+                "creditBillSummary.byUser." + toMongoKey(userId) + ".";
+
         Update update = new Update()
-                .inc(
-                        "creditBillSummary.creditBillToday",
-                        billTodayDelta
-                )
-                .inc(
-                        "creditBillSummary.creditPendingToday",
-                        pendingTodayDelta
-                )
-                .inc(
-                        "creditBillSummary.creditReceivedToday",
-                        receivedTodayDelta
-                )
+                // Hotel-level totals (existing behaviour)
+                .inc("creditBillSummary.creditBillToday", billTodayDelta)
+                .inc("creditBillSummary.creditPendingToday", pendingTodayDelta)
+                .inc("creditBillSummary.creditReceivedToday", receivedTodayDelta)
+                // Per-user totals
+                .inc(userPath + "creditBillToday", billTodayDelta)
+                .inc(userPath + "creditPendingToday", pendingTodayDelta)
+                .inc(userPath + "creditReceivedToday", receivedTodayDelta)
+                .set(userPath + "userId", userId)
                 .setOnInsert("restaurantId", hotelId)
                 .setOnInsert("date", date);
 
-        mongoTemplate.upsert(
-                query,
-                update,
-                "daily_staff_summary"
-        );
+        boolean onlyReversal = billTodayDelta <= 0
+                && pendingTodayDelta <= 0
+                && receivedTodayDelta <= 0;
+
+        if (onlyReversal) {
+            mongoTemplate.updateFirst(query, update, "daily_staff_summary");
+        } else {
+            mongoTemplate.upsert(query, update, "daily_staff_summary");
+        }
+    }
+
+    // Mongo map keys cannot contain '.' or start with '$'
+    private String toMongoKey(String userId) {
+        if (userId == null || userId.isBlank()) {
+            return "UNKNOWN";
+        }
+        return userId.replace(".", "_").replace("$", "_");
+    }
+
+    private void updateCreditGstSummary(
+            String hotelId,
+            String date,
+            String userId,
+            Map<String, Double> gstDeltas
+    ) {
+        if (gstDeltas == null || gstDeltas.isEmpty()) {
+            return;
+        }
+
+        String userPath = "creditBillSummary.byUser." + toMongoKey(userId) + ".";
+
+        Update update = new Update()
+                .setOnInsert("restaurantId", hotelId)
+                .setOnInsert("date", date)
+                .set(userPath + "userId", userId);
+
+        double total = 0.0;
+        boolean changed = false;
+
+        for (Map.Entry<String, Double> e : gstDeltas.entrySet()) {
+            if (e.getValue() == null) {
+                continue;
+            }
+            double amount = money(e.getValue());
+            if (amount == 0.0) {
+                continue;
+            }
+            String key = toMongoKey(e.getKey());
+            update.inc("creditBillSummary.gstBreakdown." + key, amount);
+            update.inc(userPath + "gstBreakdown." + key, amount);
+            total += amount;
+            changed = true;
+        }
+
+        if (!changed) {
+            return;
+        }
+
+        total = money(total);
+        update.inc("creditBillSummary.creditGstToday", total);
+        update.inc(userPath + "creditGstToday", total);
+
+        Query query = new Query(
+                Criteria.where("_id").is(getStaffSummaryId(hotelId, date)));
+
+        boolean onlyReversal = gstDeltas.values().stream()
+                .allMatch(v -> v == null || v <= 0);
+
+        if (onlyReversal) {
+            mongoTemplate.updateFirst(query, update, "daily_staff_summary");
+        } else {
+            mongoTemplate.upsert(query, update, "daily_staff_summary");
+        }
+    }
+
+    // after - before, per GST name
+    private Map<String, Double> gstDifference(
+            Map<String, Double> after,
+            Map<String, Double> before
+    ) {
+        Map<String, Double> diff = new HashMap<>();
+        if (after != null) {
+            after.forEach((k, v) -> diff.merge(k, v, Double::sum));
+        }
+        if (before != null) {
+            before.forEach((k, v) -> diff.merge(k, -v, Double::sum));
+        }
+        return diff;
     }
 
     private CompletedOrder syncCreditBillToCompletedOrders(
@@ -3884,9 +4056,17 @@ public class InstantCreditBillService {
         updateCreditBillSummary(
                 hotelId,
                 billDate,
+                bill.getCreatedById(),   // add
                 -totalAmount,
                 -pendingAmount,
                 0.0
+        );
+
+        updateCreditGstSummary(
+                hotelId,
+                billDate,
+                bill.getCreatedById(),
+                gstDifference(null, bill.getGstAmounts())
         );
 
         // 2. Remove the deleted bill's quantities from item analytics.
@@ -4047,6 +4227,7 @@ public class InstantCreditBillService {
             updateCreditBillSummary(
                     hotelId,
                     billDate,
+                    bill.getCreatedById(),   // add
                     -money(bill.getTotalAmount()),
                     -money(bill.getPendingAmount()),
                     0.0
