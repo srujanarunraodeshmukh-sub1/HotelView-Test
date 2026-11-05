@@ -12,8 +12,6 @@ public class AddItemRequest {
 
     private String dealerId;
 
-    private String categoryId;
-
     @NotNull(message = "categoryType is required")
     private CategoryType categoryType;
 
@@ -34,9 +32,6 @@ public class AddItemRequest {
     // Getters and Setters
     public String getDealerId() { return dealerId; }
     public void setDealerId(String dealerId) { this.dealerId = dealerId; }
-
-    public String getCategoryId() { return categoryId; }
-    public void setCategoryId(String categoryId) { this.categoryId = categoryId; }
 
     public CategoryType getCategoryType() { return categoryType; }
     public void setCategoryType(CategoryType categoryType) { this.categoryType = categoryType; }

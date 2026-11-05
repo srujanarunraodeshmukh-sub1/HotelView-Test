@@ -27,7 +27,6 @@ public class ItemService {
 
         Item item = new Item();
         item.setDealerId(dealerId);
-        item.setCategoryId(request.getCategoryId());
         item.setCategoryType(String.valueOf(request.getCategoryType()));
         item.setTitle(request.getTitle());
         item.setSellingPrice(request.getSellingPrice());
