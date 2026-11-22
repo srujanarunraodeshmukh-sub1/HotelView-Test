@@ -13,7 +13,9 @@ import java.util.List;
 @AllArgsConstructor
 public class DailyOrderGroupDTO {
     private String date;
-    private Double totalAmount;
+    private Double totalTransaction;
+    private Double amountReceived;
+    private Double amountPending;
     private Integer totalOrder;
     private List<DeliverySummaryDTO> orders; // Holds the flat order list for this day
 }

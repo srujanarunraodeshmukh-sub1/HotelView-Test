@@ -31,6 +31,8 @@ public class ReceiptResponse {
     private Double discountPercent; // The % entered (e.g., 10)
     private Double discountAmount;  // The calculated deduction (e.g., 100)
     private Double totalPayable;    // The final amount after discount (e.g., 900)
+    private Double paidAmount;      // NEW
+    private Double pendingAmount;   // NEW
     // -------------------------------
 
     private List<Map<String, Object>> gsttype;

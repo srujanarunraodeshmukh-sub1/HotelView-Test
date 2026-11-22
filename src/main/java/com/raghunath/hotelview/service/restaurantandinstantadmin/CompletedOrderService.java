@@ -93,12 +93,18 @@ public class CompletedOrderService {
                 } catch (Exception ignored) {}
             }
 
+            double payable = order.getTotalPayable() != null ? order.getTotalPayable() : 0.0;
+            double pending = order.getPendingAmount() != null ? order.getPendingAmount() : 0.0;
+            double paid = order.getPaidAmount() != null ? order.getPaidAmount() : payable - pending;
+
             return DeliverySummaryDTO.builder()
                     .id(order.getId())
                     .orderType(order.getOrderType())
                     .customerName(order.getCustomerName())
                     .customerMobile(order.getCustomerMobile())
                     .totalPayable(order.getTotalPayable())
+                    .paidAmount(paid)
+                    .pendingAmount(pending)
                     .checkoutAt(dateTimeFallback)
                     .build();
         }).collect(Collectors.toList());
@@ -119,6 +125,7 @@ public class CompletedOrderService {
         groupedMap.forEach((dateStr, dailyOrders) -> {
 
             double databaseGrandTotal = 0.0;
+            double databasePending = 0.0;                       // NEW
             int databaseTotalOrdersCount = 0;
 
             // 🌟 Fix: Query the entire database collection for the true global totals of this date
@@ -136,6 +143,7 @@ public class CompletedOrderService {
                                 ),
                                 org.springframework.data.mongodb.core.aggregation.Aggregation.group("checkoutDate")
                                         .sum("totalPayable").as("totalAmount")
+                                        .sum("pendingAmount").as("totalPending")   // NEW
                                         .count().as("totalOrder")
                         );
 
@@ -146,18 +154,22 @@ public class CompletedOrderService {
                 org.bson.Document rawDoc = results.getUniqueMappedResult();
                 if (rawDoc != null) {
                     databaseGrandTotal = rawDoc.get("totalAmount") != null ? ((Number) rawDoc.get("totalAmount")).doubleValue() : 0.0;
+                    databasePending = rawDoc.get("totalPending") != null ? ((Number) rawDoc.get("totalPending")).doubleValue() : 0.0;   // NEW
                     databaseTotalOrdersCount = rawDoc.get("totalOrder") != null ? ((Number) rawDoc.get("totalOrder")).intValue() : 0;
                 }
             } catch (Exception e) {
                 log.error("AGGREGATION_ERROR: Failed computing full db metrics for date {}", dateStr, e);
                 // Fallback to current page slice metrics if aggregation drops out
                 databaseGrandTotal = dailyOrders.stream().mapToDouble(o -> o.getTotalPayable() != null ? o.getTotalPayable() : 0.0).sum();
+                databasePending = dailyOrders.stream().mapToDouble(o -> o.getPendingAmount() != null ? o.getPendingAmount() : 0.0).sum();   // NEW
                 databaseTotalOrdersCount = dailyOrders.size();
             }
 
             contentGroups.add(DailyOrderGroupDTO.builder()
                     .date(dateStr)
-                    .totalAmount(databaseGrandTotal)      // ✔️ Global daily total payable sum
+                    .totalTransaction(databaseGrandTotal)                                                  // CHANGED
+                    .amountReceived(Math.round((databaseGrandTotal - databasePending) * 100.0) / 100.0)   // NEW
+                    .amountPending(Math.round(databasePending * 100.0) / 100.0)                           // NEW
                     .totalOrder(databaseTotalOrdersCount)  // ✔️ Global daily count count
                     .orders(dailyOrders)
                     .build());
@@ -241,6 +253,10 @@ public class CompletedOrderService {
         boolean printUpi = settings == null || settings.isPrintUpiAndQr();
         boolean printLogo = settings == null || settings.isIncludeRestaurantLogo();
 
+        double payable = order.getTotalPayable() != null ? order.getTotalPayable() : 0.0;
+        double pending = order.getPendingAmount() != null ? order.getPendingAmount() : 0.0;
+        double paid = order.getPaidAmount() != null ? order.getPaidAmount() : payable - pending;
+
         return ReceiptResponse.builder()
                 .restaurantName(printName ? admin.getRestaurantName() : null)
                 .restaurantAddress(printAddress ? admin.getRestaurantAddress() : null)
@@ -257,6 +273,8 @@ public class CompletedOrderService {
                 .discountPercent(order.getDiscountPercent())
                 .discountAmount(order.getDiscountAmount())
                 .totalPayable(order.getTotalPayable())
+                .paidAmount(paid)          // NEW
+                .pendingAmount(pending)    // NEW
                 .gsttype(order.getGsttype() != null ? order.getGsttype() : Collections.emptyList()) // 🌟 Added Global GST details
                 .customerName(order.getCustomerName())
                 .customerMobile(order.getCustomerMobile())
