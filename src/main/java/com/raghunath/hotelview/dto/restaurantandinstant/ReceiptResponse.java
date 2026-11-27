@@ -1,5 +1,6 @@
 package com.raghunath.hotelview.dto.restaurantandinstant;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Builder;
 import lombok.Data;
 
@@ -25,6 +26,13 @@ public class ReceiptResponse {
     private String time;
     private String orderType;
     private List<FlattenedItem> items;
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String creditBillId;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private Map<String, Double> gstDetails;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private Map<String, Double> extraCharges;
 
     // --- UPDATED PRICING SECTION ---
     private Double grandTotal;     // The original sum (e.g., 1000)

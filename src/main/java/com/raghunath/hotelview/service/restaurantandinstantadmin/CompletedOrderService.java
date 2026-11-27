@@ -70,6 +70,7 @@ public class CompletedOrderService {
                     .totalPayable(order.getTotalPayable())
                     .pendingAmount(order.getPendingAmount())
                     .paidAmount(order.getPaidAmount())
+                    .checkoutBy(order.getCheckoutBy())
                     .checkoutAt(dateTimeFallback)
                     .build();
         });

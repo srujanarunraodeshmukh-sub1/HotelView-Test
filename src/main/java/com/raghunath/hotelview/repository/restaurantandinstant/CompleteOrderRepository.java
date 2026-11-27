@@ -37,7 +37,7 @@ public interface CompleteOrderRepository extends MongoRepository<CompletedOrder,
 
     // --- Paging API (Only fetches ID, Name, Mobile, Date, Time, Total and Type) ---
     @Query(value = "{ 'hotelId' : ?0 }",
-            fields = "{ 'id':1, 'customerName':1, 'customerMobile':1, 'checkoutDate':1, 'checkoutTime':1, 'totalPayable':1, 'orderType':1, 'paidAmount': 1, 'pendingAmount': 1 }")
+            fields = "{ 'id':1, 'customerName':1, 'customerMobile':1, 'checkoutDate':1, 'checkoutTime':1, 'totalPayable':1, 'orderType':1, 'paidAmount': 1, 'pendingAmount': 1, 'checkoutBy': 1 }")
     Page<CompletedOrder> findByHotelId(String hotelId, Pageable pageable);
 
     @Query(value = "{ 'hotelId' : ?0, 'checkoutBy' : ?1 }",

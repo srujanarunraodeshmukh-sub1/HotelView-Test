@@ -31,6 +31,9 @@ public class CompletedOrder {
     private Double discountAmount;
     private Double totalPayable;
 
+    private Map<String, Double> gstDetails;
+    private Map<String, Double> extraCharges;
+
     private Double lastTotalPayable;
 
     private List<Map<String, Object>> gsttype;

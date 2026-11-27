@@ -519,16 +519,45 @@ public class InstantCreditBillService {
         double discountedAmount = money(grossTotal - discount);
 
 // 2. Add GST (percentages applied on the discounted amount)
+        // 2. Add GST
         Map<String, Double> gstAmounts = new HashMap<>();
         double gstAmount = 0.0;
-        for (Map.Entry<String, Double> gstEntry : gstDetails.entrySet()) {
-            double part = money(discountedAmount * gstEntry.getValue() / 100.0);
-            gstAmounts.put(gstEntry.getKey(), part);
-            gstAmount += part;
-        }
-        gstAmount = money(gstAmount);
 
-// 3. Add extra charges (validated)
+        boolean hasItemGst = request.getCommodities() != null
+                && request.getCommodities().stream()
+                .anyMatch(c -> c.getItemGst() != null && c.getItemGst() > 0);
+
+        if (hasItemGst) {
+            // Item-level GST: discount each line proportionally, then apply that line's GST
+            double discountRatio = grossTotal > 0 ? discount / grossTotal : 0.0;
+            double itemGstTotal = 0.0;
+
+            for (var c : request.getCommodities()) {
+                double gstPct = c.getItemGst() != null ? c.getItemGst() : 0.0;
+                if (gstPct < 0 || gstPct > 100) {
+                    throw new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "Item GST for " + c.getName() + " must be between 0 and 100");
+                }
+                double lineAmount = money(c.getRate() * c.getQuantity());
+                double lineAfterDiscount = money(lineAmount - money(lineAmount * discountRatio));
+                itemGstTotal += money(lineAfterDiscount * gstPct / 100.0);
+            }
+
+            gstAmount = money(itemGstTotal);
+            if (gstAmount > 0) {
+                gstAmounts.put("Item GST", gstAmount);
+            }
+        } else {
+            // Existing behaviour: global GST on the discounted amount
+            for (Map.Entry<String, Double> gstEntry : gstDetails.entrySet()) {
+                double part = money(discountedAmount * gstEntry.getValue() / 100.0);
+                gstAmounts.put(gstEntry.getKey(), part);
+                gstAmount += part;
+            }
+            gstAmount = money(gstAmount);
+        }
+
         Map<String, Double> extraCharges =
                 request.getExtraCharges() != null
                         ? new HashMap<>(request.getExtraCharges())
@@ -3601,6 +3630,12 @@ public class InstantCreditBillService {
         order.setAllOrders(Collections.singletonList(snapshot));
 
         order.setGrandTotal(bill.getGrossTotal());
+
+        order.setDiscountAmount(bill.getDiscount());
+        order.setGstDetails(bill.getGstDetails());
+        order.setExtraCharges(bill.getExtraCharges());
+
+
 
         order.setTotalPayable(bill.getTotalAmount());
 
